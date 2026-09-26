@@ -1,9 +1,9 @@
-# Change these lines:
-numpy==1.26.4   # Last stable version for Py3.10
-pandas==2.0.3   # Compatible with numpy 1.26.x on Py3.10
+# Core Data & Math
+numpy>=1.26.4,<2.0.0
+pandas>=2.1.4,<2.2.0
+requests>=2.31.0
+beautifulsoup4>=4.12.0
+python-dotenv>=1.0.0
 
-# Keep others as is:
-requests==2.32.4
-beautifulsoup4==4.13.4
-python-dotenv==1.1.1
-pytest>=7.4
+# Testing
+pytest>=7.4.0
