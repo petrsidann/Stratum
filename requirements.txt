@@ -1,0 +1,8 @@
+streamlit
+plotly
+requests
+bs4
+python-dotenv
+pytest
+groq
+google-genai
