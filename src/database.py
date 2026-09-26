@@ -59,6 +59,60 @@ CREATE TABLE IF NOT EXISTS scans (
     data_source TEXT DEFAULT 'sample',
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
+
+-- Phase 5: Immutable Audit Ledger ("black box"). Every scan result — even
+-- sub-threshold noise — lands here with a UUID, UTC timestamp, confidence
+-- score and source-data hash so history can never be quietly rewritten.
+-- Immutability is enforced by SQLite triggers below: UPDATE/DELETE are only
+-- permitted while status='pending'; resolved/expired rows are sealed.
+CREATE TABLE IF NOT EXISTS scan_history (
+    id TEXT PRIMARY KEY,                -- UUID
+    timestamp TEXT NOT NULL,            -- ISO-8601 UTC
+    match_ref TEXT NOT NULL,
+    sport TEXT,
+    market_type TEXT NOT NULL,
+    selection TEXT NOT NULL,
+    offered_odds REAL,
+    fair_odds_calc REAL,
+    edge_pct REAL,
+    confidence_score INTEGER,
+    book_agreement_count INTEGER DEFAULT 0,
+    llm_insight_hash TEXT,
+    source_data_hash TEXT,
+    data_source TEXT DEFAULT 'live',
+    status TEXT NOT NULL DEFAULT 'pending'
+        CHECK (status IN ('pending','resolved','expired','noise')),
+    closing_odds REAL,
+    clv_pct REAL,
+    outcome TEXT,
+    resolved_at TEXT
+);
+
+-- Phase 5: per-(sport, market_type) rolling win-rate stats, refreshed by
+-- audit_ledger.resolve_scan() to feed the confidence scorer's history term.
+CREATE TABLE IF NOT EXISTS market_stats (
+    sport TEXT NOT NULL,
+    market_type TEXT NOT NULL,
+    n_resolved INTEGER NOT NULL DEFAULT 0,
+    n_won INTEGER NOT NULL DEFAULT 0,
+    avg_clv_pct REAL,
+    updated_at TEXT,
+    PRIMARY KEY (sport, market_type)
+);
+
+CREATE TRIGGER IF NOT EXISTS scan_history_no_update
+BEFORE UPDATE ON scan_history
+WHEN OLD.status != 'pending'
+BEGIN
+    SELECT RAISE(ABORT, 'scan_history rows are immutable once resolved or expired');
+END;
+
+CREATE TRIGGER IF NOT EXISTS scan_history_no_delete
+BEFORE DELETE ON scan_history
+WHEN OLD.status != 'pending'
+BEGIN
+    SELECT RAISE(ABORT, 'scan_history rows are immutable once resolved or expired');
+END;
 """
 
 
