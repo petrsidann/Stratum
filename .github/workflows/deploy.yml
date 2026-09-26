@@ -81,14 +81,14 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          # Explicitly point to lockfile to fix cache resolution error
-          cache: 'npm'
-          cache-dependency-path: frontend/package-lock.json
-
+          # FIX: Removed cache configuration entirely to avoid "path not resolved" error
+          # We will rely on standard npm install instead of cached ci
+          
       - name: Install Frontend Dependencies
         working-directory: ./frontend
-        run: npm ci --prefer-offline --no-audit --fund=false
-
+        # FIX: Changed 'npm ci' (which requires lockfile) to 'npm install' (which generates one)
+        run: npm install
+        
       - name: Copy Data into Frontend Public Folder
         working-directory: ./frontend
         run: |
