@@ -1,10 +1,13 @@
-streamlit>=1.32
-plotly>=5.20
-pandas
-requests
-beautifulsoup4
-python-dotenv
-pytest
-groq
-google-genai
-threadpoolctl
+# Stratum — runtime dependencies for Streamlit Cloud.
+# EXACT pins only: share.streamlit.io builds this file verbatim; any version
+# drift breaks deploy reproducibility. No wildcards, no minimums.
+# Dev tooling (pytest) lives in requirements-dev.txt so the Cloud image
+# stays small.
+streamlit==1.64.0
+pandas==2.3.1
+plotly==7.1.0
+requests==2.32.4
+beautifulsoup4==4.13.4
+python-dotenv==1.1.1
+groq==1.7.0
+google-genai==2.25.0

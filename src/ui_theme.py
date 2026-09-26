@@ -281,6 +281,13 @@ header[data-testid="stHeader"] .main-header {{ display: none !important; }}
 }}
 
 /* ---------- Buttons as CTAs ---------- */
+/* Touch-target discipline: every interactive control is >= 44px tall
+   (Apple HIG / WCAG 2.5.5) so the terminal is thumb-safe on phones. */
+.stButton > button, .stFormSubmitButton > button,
+.stDownloadButton > button, .stRadio label,
+[data-testid="stBaseButton"], [data-baseweb="tab"] {{
+  min-height: 44px;
+}}
 .stButton > button, .stFormSubmitButton > button {{
   font-family: {sans}; font-weight: 700; letter-spacing: 0.6px;
   border-radius: {radius_pill}; padding: 10px 22px; min-height: 44px;
@@ -311,6 +318,37 @@ header[data-testid="stHeader"] .main-header {{ display: none !important; }}
   font-family: {mono}; font-variant-numeric: tabular-nums; font-size: 12.5px;
   border-color: {border} !important; color: {text_primary};
 }}
+
+/* ---------- Mobile-safe tables ---------- */
+/* Any raw <table> (and Streamlit's dataframe/grid root) is wrapped in a
+   horizontal-scroll container so wide ledgers never break the phone layout
+   — content scrolls sideways instead of blowing out the viewport. */
+.stratum-table-wrap {{
+  overflow-x: auto; -webkit-overflow-scrolling: touch;
+  max-width: 100%; border: 1px solid {border}; border-radius: {radius_card};
+}}
+.stratum-table-wrap table {{ border-collapse: collapse; width: 100%; min-width: 640px; }}
+.stratum-table-wrap th, .stratum-table-wrap td {{
+  font-family: {mono}; font-size: 12.5px; padding: 8px 10px; text-align: left;
+  border-bottom: 1px solid {border}; color: {text_primary}; white-space: nowrap;
+}}
+.stratum-table-wrap th {{ color: {text_secondary}; text-transform: uppercase;
+  letter-spacing: 1px; font-size: 10.5px; }}
+div[data-testid="stDataFrame"], div[data-testid="stTable"] {{
+  max-width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch;
+}}
+
+/* ---------- Graceful-degradation banner (missing API keys) ---------- */
+.stratum-banner {{
+  background: rgba(245, 165, 36, 0.10); border: 1px solid {warning};
+  border-left: 4px solid {warning}; border-radius: 10px;
+  padding: 14px 16px; margin: 0 0 14px 0;
+}}
+.stratum-banner-title {{
+  font-weight: 800; font-size: 12.5px; letter-spacing: 1.4px;
+  text-transform: uppercase; color: {warning};
+}}
+.stratum-banner-body {{ font-size: 13px; color: {text_secondary}; margin-top: 4px; line-height: 1.5; }}
 
 /* ---------- Tabs / expander / alerts ---------- */
 .stTabs [data-baseweb="tab-list"] {{ gap: 2px; background: {surface}; border-radius: 10px; padding: 4px; border: 1px solid {border}; }}
@@ -477,11 +515,36 @@ def section_label(text: str) -> None:
     st.markdown(f'<div class="stratum-section">{esc(text)}</div>', unsafe_allow_html=True)
 
 
+def table_html(rows: list, headers: list) -> str:
+    """Mobile-safe HTML table wrapped in a horizontal-scroll container.
+
+    Every column stays thumb-readable on phones: the wrapper scrolls
+    sideways (overflow-x: auto) instead of letting wide tables break the
+    page layout. All cell values are HTML-escaped — no raw injection.
+    Pure function: returns a string, safe to unit-test without Streamlit.
+    """
+    head = "".join(f"<th>{esc(h)}</th>" for h in headers)
+    body = "".join(
+        "<tr>" + "".join(f"<td>{esc('' if c is None else c)}</td>" for c in row) + "</tr>"
+        for row in rows
+    )
+    return (
+        '<div class="stratum-table-wrap"><table>'
+        f"<thead><tr>{head}</tr></thead><tbody>{body}</tbody>"
+        "</table></div>"
+    )
+
+
 # Inline SVG icon set for the bottom nav — strokes inherit currentColor.
 NAV_ICONS = {
     "SCAN": (
         '<svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/>'
         '<line x1="16.5" y1="16.5" x2="21" y2="21"/></svg>'
+    ),
+    "AUDIT": (
+        '<svg viewBox="0 0 24 24"><path d="M6 3h12l2 4v12a2 2 0 0 1-2 2H6a2 2 0 '
+        '0 1-2-2V7z"/><line x1="8" y1="11" x2="16" y2="11"/>'
+        '<line x1="8" y1="15" x2="13" y2="15"/></svg>'
     ),
     "PORTFOLIO": (
         '<svg viewBox="0 0 24 24"><rect x="3" y="12" width="4" height="8" rx="1"/>'
@@ -499,7 +562,7 @@ NAV_ICONS = {
     ),
 }
 
-DEFAULT_NAV_ORDER = ["SCAN", "PORTFOLIO", "ALERTS", "SETTINGS"]
+DEFAULT_NAV_ORDER = ["SCAN", "AUDIT", "PORTFOLIO", "ALERTS", "SETTINGS"]
 
 
 def bottom_nav_html(active: str, views: list = None) -> str:

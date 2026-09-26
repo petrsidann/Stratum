@@ -503,6 +503,14 @@ class SentinelThread(threading.Thread):
 
 # ---------------------------------------------------------------------------
 # Global singleton management (main.py lifecycle hooks)
+#
+# Cloud-safety contract (Streamlit Cloud restarts sessions frequently):
+#   * AT MOST ONE Sentinel thread per process. ``is_sentinel_alive()`` lets
+#     session code check before spawning; ``start_sentinel`` itself refuses
+#     to double-spawn unless ``restart=True`` — a second live watcher would
+#     duplicate polls, duplicate alerts and leak memory.
+#   * ``stop_all_sentinels()`` is registered via atexit in main.py so every
+#     daemon thread is joined gracefully when the interpreter shuts down.
 # ---------------------------------------------------------------------------
 
 _SENTINEL: Optional[SentinelThread] = None
@@ -511,11 +519,22 @@ _MANAGER_LOCK = threading.Lock()
 
 def start_sentinel(tracked_matches: List[str], sport: str = "NFL",
                    webhook_url: str = "", db_path: Optional[str] = None,
-                   interval: float = POLL_INTERVAL_SECONDS, **kwargs) -> SentinelThread:
-    """Start (or restart) the process-wide Sentinel singleton."""
+                   interval: float = POLL_INTERVAL_SECONDS,
+                   restart: bool = False, **kwargs) -> SentinelThread:
+    """Start (or explicitly restart) the process-wide Sentinel singleton.
+
+    Thread-safe and idempotent: if a live Sentinel already exists this call
+    returns it untouched (never spawning a duplicate). Pass ``restart=True``
+    only from an explicit user action (e.g. Settings changed) to replace the
+    running watcher with a fresh one.
+    """
     global _SENTINEL
     with _MANAGER_LOCK:
-        stop_sentinel()
+        if _SENTINEL is not None and _SENTINEL.running and not restart:
+            logger.info("Sentinel already running — reusing existing thread "
+                        "(no duplicate spawn)")
+            return _SENTINEL
+        _stop_locked(_SENTINEL)
         _SENTINEL = SentinelThread(
             tracked_matches=tracked_matches, sport=sport,
             webhook_url=webhook_url, db_path=db_path, interval=interval, **kwargs,
@@ -524,17 +543,61 @@ def start_sentinel(tracked_matches: List[str], sport: str = "NFL",
         return _SENTINEL
 
 
+def _stop_locked(thread: Optional[SentinelThread]) -> None:
+    """Join a thread while the manager lock is held (internal helper)."""
+    if thread is not None:
+        try:
+            thread.stop()
+        except Exception:  # pragma: no cover - defensive
+            pass
+
+
 def get_sentinel() -> Optional[SentinelThread]:
+    """Return the current singleton WITHOUT acquiring the manager lock.
+
+    Lock-free by design: callers may invoke this from inside start/stop
+    critical sections, and it must never deadlock or block a UI rerun.
+    """
     return _SENTINEL
 
 
+def is_sentinel_alive() -> bool:
+    """True when a Sentinel thread is currently live in this process.
+
+    Session code MUST check this before attempting to start one — Streamlit
+    Cloud reruns/boot restarts make naive spawn-on-render leak threads.
+    """
+    with _MANAGER_LOCK:
+        s = _SENTINEL
+        return bool(s is not None and s.running)
+
+
 def stop_sentinel() -> None:
-    """Gracefully stop the current singleton, if any."""
+    """Gracefully stop the current singleton, if any (bounded join)."""
     global _SENTINEL
-    current = _SENTINEL
-    if current is not None:
-        try:
-            current.stop()
-        except Exception:  # pragma: no cover - defensive
-            pass
+    with _MANAGER_LOCK:
+        current = _SENTINEL
         _SENTINEL = None
+        _stop_locked(current)
+
+
+def stop_all_sentinels(timeout: float = 5.0) -> int:
+    """atexit hook: join/kill every live Stratum daemon thread.
+
+    Returns how many threads were stopped. Safe to call multiple times and
+    safe to register more than once — a dead thread stops instantly.
+    """
+    stopped = 0
+    seen = set()
+    for t in threading.enumerate():
+        if isinstance(t, SentinelThread) and t is not threading.current_thread() \
+                and id(t) not in seen:
+            seen.add(id(t))
+            try:
+                t.stop(timeout=timeout)
+                stopped += 1
+            except Exception:  # pragma: no cover - defensive
+                pass
+    if stopped:
+        logger.info("Shutdown hook stopped %d Sentinel thread(s)", stopped)
+    return stopped

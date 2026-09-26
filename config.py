@@ -1,8 +1,12 @@
-"""Stratum configuration — loads environment variables safely.
+"""Stratum configuration — loads environment variables / secrets safely.
 
-All secrets live in a local `.env` file (gitignored). Every accessor returns
-a safe default instead of raising when a variable is missing, so the app can
-boot in degraded mode without crashing.
+Secret resolution order (first non-empty wins):
+  1. ``st.secrets``  — Streamlit Cloud's Secrets manager (.streamlit/secrets.toml)
+  2. ``os.environ``  — plain env vars / local .env via python-dotenv
+
+Every accessor returns a safe default instead of raising when a variable is
+missing, so the app can boot in degraded mode without crashing — even with
+zero keys and zero network on share.streamlit.io.
 """
 
 from __future__ import annotations
@@ -18,9 +22,25 @@ except ImportError:  # pragma: no cover - optional dependency
     pass
 
 
+def _streamlit_secret(key: str) -> str:
+    """Read one key from Streamlit's secrets store, or "" if unavailable.
+
+    Wrapped in a bare try/except because outside a Streamlit runtime (plain
+    pytest, `python main.py`) st.secrets raises FileNotFound/KeyError — that
+    simply means "no secrets here", which is a valid, non-fatal state.
+    """
+    try:
+        import streamlit as st
+
+        value = st.secrets.get(key)  # type: ignore[attr-defined]
+        return str(value) if value not in (None, "") else ""
+    except Exception:
+        return ""
+
+
 def get_env(key: str, default: str = "") -> str:
-    """Return an environment variable, or a safe default if unset/empty."""
-    value = os.getenv(key)
+    """Return a secret: Streamlit secrets first, then os.environ, then default."""
+    value = _streamlit_secret(key) or os.getenv(key)
     return value if value not in (None, "") else default
 
 
