@@ -1,0 +1,18 @@
+{
+  "name": "Stratum — Quant Edge Terminal",
+  "short_name": "Stratum",
+  "start_url": "/?view=scan",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0E1116",
+  "theme_color": "#0E1116",
+  "description": "Mobile-first betting edge terminal: live line-shift sentinel, arbitrage scanner, CLV portfolio.",
+  "icons": [
+    {
+      "src": "https://st-assets.streamlit.io/static/media/streamlit-favicon.14aab2781aa3892436931f50582ada5e.ico",
+      "sizes": "48x48",
+      "type": "image/x-icon"
+    }
+  ]
+}

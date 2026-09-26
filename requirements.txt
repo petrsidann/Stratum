@@ -1,8 +1,10 @@
-streamlit
-plotly
+streamlit>=1.32
+plotly>=5.20
+pandas
 requests
 beautifulsoup4
 python-dotenv
 pytest
 groq
 google-genai
+threadpoolctl

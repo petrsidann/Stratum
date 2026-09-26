@@ -1,19 +1,33 @@
-"""Stratum v0.1 — Streamlit entrypoint (Phase 3: Scanner, Signals, CLV).
+"""Stratum v0.2 — Production mobile-first PWA shell (Phase 4).
 
-Flow: sidebar inputs -> optional live fetch (DDG snippets + Open-Meteo weather)
--> LLM extraction (Groq/Gemini) or regex parse -> manual-entry fallback for any
-missing price -> ALL math via src/quant_engine.py -> Plotly charts from
-src/report.py -> verdict card. Phase 3 adds three tabs: 🔍 Deep Scan (200-market
-board + stale/arb flags), 📊 Signals Dashboard (steam/RLM/arb detectors) and
-💰 Bankroll & CLV (Obsidian-memory bet log + performance report). The page is
-always usable with zero keys and zero network; Stratum never guesses odds.
+Native-app architecture on Streamlit:
+  * App chrome   : ui_theme.inject_css() restyles every widget; default
+                   header/menu/footer are hidden. Dark fintech palette,
+                   Inter labels + Roboto Mono data, zero emojis.
+  * Navigation   : fixed bottom tab bar [SCAN] [PORTFOLIO] [ALERTS]
+                   [SETTINGS]. Tabs navigate via ?view=<key> links (works
+                   under Streamlit's iframe CSP where JS injection does not);
+                   main.py syncs the query param into session_state so all
+                   other widgets keep their state across navigation.
+  * Live layer   : src.live_watcher.SentinelThread runs in the background at
+                   a 30s cadence, diffs odds against SQLite snapshots and
+                   pushes phone alerts through a Discord/Telegram webhook.
+                   Lifecycle hooks start it on first render and stop it on
+                   interpreter exit.
+  * Honesty      : unchanged framework rules — all math lives in
+                   quant_engine, sample boards are loudly labeled, unknown
+                   prices stay unknown. The UI never invents numbers.
+
+Run: streamlit run main.py
 """
 
 from __future__ import annotations
 
+import atexit
 import logging
 
 logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("stratum.app")
 
 try:
     import streamlit as st
@@ -21,12 +35,20 @@ try:
 except ImportError:  # pragma: no cover - allows `python main.py` headless
     _HAVE_STREAMLIT = False
 
-from src import report, scraper
-from src.clv_auditor import get_performance_report, list_bets, record_bet, settle_bet, update_closing_line
-from src.llm_router import BrainUnavailableError, StratumBrain
-from src.market_scanner import MarketScanner
+import pandas as pd
+import plotly.graph_objects as go
+
+from config import DATABASE_PATH, get_env
+from src import report, scraper, ui_theme
+from src.clv_auditor import (
+    get_performance_report, list_bets, record_bet, settle_bet, update_closing_line,
+)
+from src.database import init_db
+from src import live_watcher
+from src.market_scanner import MARKET_ML, MARKET_PROPS, MarketScanner
 from src.quant_engine import (
     american_to_decimal,
+    arbitrage_pct,
     ev_pct,
     implied_probability,
     kelly_criterion,
@@ -34,14 +56,18 @@ from src.quant_engine import (
     vig_pct_two_way,
 )
 from src.signal_detector import find_arbitrage_opportunities, scan_signals_for_match
+from src.ui_theme import COLORS, fmt_odds, money, pct, signed
 
 SPORTS = ["NFL", "NBA", "MLB", "Soccer", "Tennis"]
-
+VIEWS = ["scan", "portfolio", "alerts", "settings"]
+FILTERS = ["ALL", "STEAM", "ARB", "PROPS"]
+DEFAULT_WEBHOOK = get_env("STRATUM_WEBHOOK")
 
 # ---------------------------------------------------------------------------
 # Pure analysis core (no Streamlit, no network) — unit-tested in
 # tests/test_main_flow.py. All arithmetic happens HERE, inside quant_engine.
 # ---------------------------------------------------------------------------
+
 def analyze_market(
     ml_home: float,
     ml_away: float,
@@ -150,7 +176,7 @@ def build_fair_probs(ml_home, ml_away):
     return {"home": fair_home, "away": fair_away}, prob_map
 
 
-def gather_live_context(match: str, sport: str, lat, lon, brain: StratumBrain):
+def gather_live_context(match: str, sport: str, lat, lon, brain):
     """Fetch context + weather + parsed prices. Returns (context, weather, parsed, warnings).
 
     Never raises: any failure degrades to empty text / None prices + warnings,
@@ -164,6 +190,8 @@ def gather_live_context(match: str, sport: str, lat, lon, brain: StratumBrain):
 
     parsed = None
     if context:
+        from src.llm_router import BrainUnavailableError, StratumBrain
+        brain = brain or StratumBrain()
         if brain.is_configured():
             try:
                 parsed = brain.extract_market_context(context, sport)
@@ -187,384 +215,715 @@ def gather_live_context(match: str, sport: str, lat, lon, brain: StratumBrain):
 
 
 # ---------------------------------------------------------------------------
-# Streamlit UI
+# Phase 4 pure view-model helpers (unit-tested in tests/test_ui_and_sentinel.py)
 # ---------------------------------------------------------------------------
 
-def _tab_analyze(sport: str, match: str, lat, lon):
-    """Phase 1/2 single-market analysis (original flow)."""
-    with st.sidebar:
-        mode = st.toggle("Use live fetch", value=True, help="Off = manual odds entry only")
-        brain = StratumBrain()
-        if not brain.is_configured():
-            st.info("No GROQ_API_KEY / GOOGLE_API_KEY found — live fetch uses regex parse + manual entry.")
+def best_ml_pair(rows):
+    """Best decimal price per opposing ML side from real rows only.
 
-    if not st.button("Analyze", type="primary", disabled=not match.strip()):
-        return
+    Returns (home_best, away_best) American odds or (None, None). Selections
+    must literally be Home/Away — we never guess which row is which side.
+    """
+    home = away = None
+    for r in rows or []:
+        if r.get("market_type") != MARKET_ML or r.get("american_odds") in (None, 0):
+            continue
+        sel = r.get("selection")
+        if sel == "Home" and (home is None or american_to_decimal(r["american_odds"]) > american_to_decimal(home)):
+            home = r["american_odds"]
+        elif sel == "Away" and (away is None or american_to_decimal(r["american_odds"]) > american_to_decimal(away)):
+            away = r["american_odds"]
+    return home, away
 
-    # ---- Step 1: optional live fetch -------------------------------------
-    parsed = None
-    weather = None
-    context = ""
-    if mode:
-        with st.spinner("Fetching context (polite scrape)…"):
-            context, weather, parsed, fetch_warnings = gather_live_context(match, sport, lat, lon, brain)
-        for w in fetch_warnings:
-            st.warning(w)
 
-    # ---- Step 2: manual-entry fallback for anything missing ---------------
-    has_ml = bool(parsed) and parsed.get("ml_home_american") is not None and parsed.get("ml_away_american") is not None
-    if not has_ml:
-        st.warning(
-            "Auto-fetch incomplete — enter the live prices you see. "
-            "Stratum never guesses odds.",
-            icon="✍️",
-        )
-    st.subheader("Prices" + (" — fetched (confirm below)" if has_ml else " — manual entry"))
-    c1, c2, c3, c4 = st.columns(4)
-    with c1:
-        ml_home = st.number_input("ML Home (American)", value=parsed["ml_home_american"] if has_ml else None, step=5, key="mlh")
-    with c2:
-        ml_away = st.number_input("ML Away (American)", value=parsed["ml_away_american"] if has_ml else None, step=5, key="mla")
-    with c3:
-        spread = st.number_input("Spread Home (optional)", value=(parsed or {}).get("spread_home"), step=0.5, key="spr")
-    with c4:
-        total = st.number_input("Total (optional)", value=(parsed or {}).get("total_line"), step=0.5, key="tot")
+def opportunity_cards(scan_rows, comparison, fair_probs=None, steam=False):
+    """Reduce a raw scan into ranked, UI-ready opportunity cards.
 
-    if ml_home is None or ml_away is None or ml_home == 0 or ml_away == 0:
-        st.stop()  # "Unknown" is valid; we simply do not compute without real prices
+    Each card: game/market/selection/book/best odds/fair odds/EV %, tagged
+    with STEAM / ARB / STALE / SAMPLE flags. Only rows carrying a real
+    observed price become cards; anything without an EV baseline keeps
+    ev=None (rendered 'UNKNOWN', never fabricated). Arb/stale sort first.
+    """
+    fair_probs = fair_probs or {}
+    stale_keys = {
+        (f.get("market_type"), f.get("bookmaker"))
+        for f in (comparison.get("stale_flags") or [])
+    }
+    arb_sels = set()
+    arb_pct_val = 0.0
+    for flag in comparison.get("arb_flags") or []:
+        arb_sels.update({flag.get("side_a"), flag.get("side_b")})
+        arb_pct_val = max(arb_pct_val, float(flag.get("arb_pct") or 0.0))
 
-    # ---- Step 3: ALL math in quant_engine ----------------------------------
-    with st.expander("Model override & bankroll (for EV / Kelly)"):
-        st.caption("Fair prob vs implied is 0 by definition — paste YOUR model win% on the home side to get real EV/Kelly.")
-        model_pct = st.number_input("Model win% on HOME (0 = none)", min_value=0, max_value=100, value=0, step=1)
-        bankroll = st.number_input("Bankroll ($)", min_value=1.0, value=1000.0, step=50.0)
-    try:
-        analysis = analyze_market(
-            ml_home, ml_away,
-            model_prob_home=(model_pct / 100.0) if model_pct else None,
-            bankroll=bankroll,
-        )
-    except ValueError as exc:
-        st.error(f"Odds rejected by quant engine: {exc}")
-        st.stop()
+    ranked = rank_value_spots(scan_rows, fair_probs.get("prob_map", {}))
+    cards = []
+    for r in ranked:
+        if r.get("american_odds") in (None, 0):
+            continue
+        fair_amer = fair_american(fair_probs.get("prob_map", {}).get(r.get("selection")))
+        cards.append({
+            "game": r.get("match_id", ""),
+            "market": r.get("market_type", ""),
+            "selection": r.get("selection", ""),
+            "book": r.get("bookmaker", ""),
+            "best_odds": r["american_odds"],
+            "line": r.get("line"),
+            "fair_odds": fair_amer,
+            "ev_pct": r.get("ev_pct"),
+            "is_props": r.get("market_type") == MARKET_PROPS,
+            "arb": r.get("selection") in arb_sels,
+            "arb_pct": arb_pct_val if r.get("selection") in arb_sels else 0.0,
+            "stale": (r.get("market_type"), r.get("bookmaker")) in stale_keys,
+            "steam": bool(steam),
+            "sample": r.get("data_source") == "sample",
+        })
+    cards.sort(key=lambda c: (not c["arb"], not c["stale"],
+                              -(c["ev_pct"] if c["ev_pct"] is not None else -1e9)))
+    return cards
 
-    # ---- Header card --------------------------------------------------------
-    home, _, away = (match + " @ ").split("@", 1)
-    weather_line = (
-        f"Weather: {weather['temp_c']:.0f}°C, {weather['wind_kmh']:.0f} km/h wind, "
-        f"{weather['precip_mm']:.1f} mm — {weather['condition']}"
-        if weather else "Weather: Unknown"
-    )
-    st.subheader(f"{home.strip()} vs {away.strip()}  ·  {sport}")
-    st.caption(weather_line)
-    if (parsed or {}).get("injury_notes"):
-        st.caption(f"🩑 Injuries: {parsed['injury_notes']}")
-    if (parsed or {}).get("source_quotes"):
-        with st.expander("Audit — exact source quotes used by the extractor"):
-            for q in parsed["source_quotes"]:
-                st.write(f"“{q}”")
 
-    # ---- Charts -------------------------------------------------------------
-    left, right = st.columns(2)
-    with left:
-        st.plotly_chart(report.chart_novig(
-            analysis["fair"]["home"], analysis["fair"]["away"],
-            analysis["implied"]["home"], analysis["implied"]["away"],
-        ), use_container_width=True)
-    with right:
-        pub = (parsed or {}).get("public_ticket_pct_home")
-        if pub is not None:
-            line_dir = "flat"
-            if (parsed or {}).get("sharp_signal") == "rlm":
-                line_dir = "up" if pub > 50 else "down"
-            st.plotly_chart(report.chart_rlm(pub, line_dir), use_container_width=True)
-        elif analysis["kelly"]:
-            k = analysis["kelly"]
-            st.plotly_chart(
-                report.chart_kelly(k["edge_home_pct"], k["quarter_kelly_frac"], k["bankroll"]),
-                use_container_width=True,
-            )
+def filter_cards(cards, filt: str):
+    """Apply SCAN filter chips: ALL / STEAM / ARB / PROPS."""
+    f = (filt or "ALL").upper()
+    if f == "STEAM":
+        return [c for c in cards if c["steam"]]
+    if f == "ARB":
+        return [c for c in cards if c["arb"]]
+    if f == "PROPS":
+        return [c for c in cards if c["is_props"]]
+    return list(cards)
+
+
+def ledger_with_pnl(bets):
+    """Enrich bet rows with realized profit (quant_engine decimal math only)."""
+    out = []
+    for b in bets or []:
+        row = dict(b)
+        status, stake = row.get("status"), float(row.get("stake") or 0.0)
+        if status == "won" and row.get("odds_placed"):
+            row["profit"] = round(stake * (american_to_decimal(float(row["odds_placed"])) - 1.0), 2)
+        elif status == "lost":
+            row["profit"] = -stake
         else:
-            st.info("RLM chart needs public ticket %; Kelly chart needs a model probability. Provide one above.")
-
-    # ---- Verdict ------------------------------------------------------------
-    st.subheader("Verdict")
-    fh = fair_american(analysis["fair"]["home"])
-    fa = fair_american(analysis["fair"]["away"])
-    rows = [
-        f"**Home** — MARKET {int(ml_home):+d}  vs  FAIR {fh:+d}  (fair prob {analysis['fair']['home'] * 100:.2f}%)",
-        f"**Away** — MARKET {int(ml_away):+d}  vs  FAIR {fa:+d}  (fair prob {analysis['fair']['away'] * 100:.2f}%)",
-    ]
-    if analysis["kelly"]:
-        k = analysis["kelly"]
-        tag_home = "🟢 +EV" if k["ev_home_pct"] > 0 else "🔴 -EV"
-        tag_away = "🟢 +EV" if k["ev_home_pct"] < 0 else "🔴 -EV"
-        rows.insert(1, f"Home {tag_home} ({k['ev_home_pct']:+.2f}% EV @ model {k['model_prob_home'] * 100:.0f}%) · Away {tag_away}")
-        stake_txt = f"${k['stake']:,.2f}" if k["stake"] > 0 else "$0.00 (no bet)"
-        rows.append(f"**Recommended ¼-Kelly stake:** {stake_txt} of ${k['bankroll']:,.2f} bankroll")
-    else:
-        rows.append("**Kelly sizing:** needs model probability — enter your own win% above to compute real EV/Kelly.")
-    rows.append(f"**Book vig:** {analysis['vig_pct']:.2f}%  ·  Spread: {spread if spread is not None else 'Unknown'}  ·  Total: {total if total is not None else 'Unknown'}")
-    st.markdown("\n\n".join(rows))
+            row["profit"] = 0.0
+        out.append(row)
+    return out
 
 
-def _tab_deep_scan(sport: str, match: str):
-    """🔍 Deep Scan — 200-market board, stale lines, arb highlights."""
-    if not match.strip():
-        st.info("Enter a match (Home @ Away) in the sidebar to run a deep scan.")
+def dark_figure(fig: go.Figure, title: str = "") -> go.Figure:
+    """Re-skin any Plotly figure with the Stratum dark theme tokens."""
+    fig.update_layout(
+        template="plotly_dark",
+        paper_bgcolor=COLORS["surface"],
+        plot_bgcolor=COLORS["surface"],
+        # Font family is set on every component individually — update_layout
+        # does NOT cascade a bare `font.*` onto axis/title fonts in Plotly.
+        font=dict(family=ui_theme.FONTS["mono"], color=COLORS["text_secondary"], size=11),
+        margin=dict(l=8, r=8, t=42 if title else 12, b=8),
+        height=280,
+        xaxis=dict(gridcolor=COLORS["border"], zerolinecolor=COLORS["border"],
+                   tickfont=dict(family=ui_theme.FONTS["mono"], color=COLORS["text_secondary"])),
+        yaxis=dict(gridcolor=COLORS["border"], zerolinecolor=COLORS["border"],
+                   tickfont=dict(family=ui_theme.FONTS["mono"], color=COLORS["text_secondary"])),
+        hoverlabel=dict(font=dict(family=ui_theme.FONTS["mono"])),
+        showlegend=False,
+    )
+    if title:
+        fig.update_layout(title=dict(text=title,
+                                     font=dict(family=ui_theme.FONTS["sans"],
+                                               color=COLORS["text_primary"], size=13)))
+    return fig
+
+
+def cumulative_profit_figure(rows) -> go.Figure:
+    """Dark-theme cumulative settled P&L line chart from enriched ledger rows."""
+    xs, ys = [], []
+    running = 0.0
+    for b in sorted(rows or [], key=lambda r: str(r.get("created_at") or "")):
+        if b.get("status") not in ("won", "lost"):
+            continue
+        running += float(b.get("profit", 0.0))
+        xs.append(str(b.get("created_at") or "?"))
+        ys.append(round(running, 2))
+    fig = go.Figure()
+    color = COLORS["positive"] if (ys and ys[-1] >= 0) else COLORS["negative"]
+    if xs:
+        fig.add_trace(go.Scatter(
+            x=xs, y=ys, mode="lines+markers",
+            line=dict(color=color, width=2.5), marker=dict(size=7, color=color),
+            fill="tozeroy",
+            fillcolor=("rgba(46,230,166,0.08)" if ys[-1] >= 0 else "rgba(255,77,77,0.08)"),
+        ))
+    return dark_figure(fig, "CUMULATIVE P&L")
+
+
+def clv_histogram_figure(clv_values) -> go.Figure:
+    """Dark-theme CLV distribution histogram (beat-close margins)."""
+    vals = [float(v) for v in (clv_values or []) if v is not None]
+    fig = go.Figure()
+    if vals:
+        fig.add_trace(go.Histogram(
+            x=vals, nbinsx=max(6, min(14, len(vals))),
+            marker_color=COLORS["positive"], opacity=0.85,
+        ))
+    return dark_figure(fig, "CLV DISTRIBUTION — BEAT vs MISS THE CLOSE")
+
+
+# ---------------------------------------------------------------------------
+# Sentinel lifecycle (startup / shutdown hooks)
+# ---------------------------------------------------------------------------
+
+_SENTINEL_KEY = "sentinel"          # session_state handle (per browser session)
+_PROC_STARTED = False               # process-level guard (one thread per server)
+
+
+def _load_settings() -> dict:
+    """Settings persistence: .streamlit/settings.json keeps values across
+    fresh browser sessions (session_state alone dies with the tab)."""
+    import json
+    import os
+
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".streamlit", "settings.json")
+    defaults = {
+        "sentinel_enabled": bool(DEFAULT_WEBHOOK),
+        "webhook_url": DEFAULT_WEBHOOK,
+        "bankroll": 1000.0,
+        "kelly_fraction": 0.25,
+        "tracked": [],
+        "theme": "dark",
+    }
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            stored = json.load(fh)
+        defaults.update({k: v for k, v in stored.items() if k in defaults})
+    except (OSError, ValueError):
+        pass  # first run / corrupt file -> defaults, never crash
+    return defaults
+
+
+def _save_settings(settings: dict) -> None:
+    import json
+    import os
+
+    dirpath = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".streamlit")
+    try:
+        os.makedirs(dirpath, exist_ok=True)
+        with open(os.path.join(dirpath, "settings.json"), "w", encoding="utf-8") as fh:
+            json.dump(settings, fh, indent=2)
+    except OSError as exc:  # read-only disk etc — degrade quietly
+        logger.warning("Settings not persisted: %s", exc)
+
+
+def ensure_app_boot() -> dict:
+    """One-time per-process boot: DB schema + settings + shutdown hook.
+
+    The Sentinel starts lazily (only when enabled in Settings) but ALWAYS
+    stops gracefully on interpreter exit via atexit.
+    """
+    global _PROC_STARTED
+    init_db()
+    live_watcher.ensure_schema()
+    if "settings" not in st.session_state:
+        st.session_state["settings"] = _load_settings()
+    if not _PROC_STARTED:
+        atexit.register(live_watcher.stop_sentinel)
+        _PROC_STARTED = True
+    return st.session_state["settings"]
+
+
+def sync_sentinel(settings: dict, force_restart: bool = False) -> bool:
+    """Reconcile the singleton watcher with the desired Settings state.
+
+    Returns True when the Sentinel thread is alive afterwards.
+    """
+    current = live_watcher.get_sentinel()
+    desired_running = bool(settings.get("sentinel_enabled"))
+    tracked = [t for t in settings.get("tracked", []) if t and t.strip()]
+
+    if not desired_running:
+        if current is not None:
+            live_watcher.stop_sentinel()
+            st.session_state.pop(_SENTINEL_KEY, None)
+        return False
+
+    if current is not None and not force_restart:
+        current.set_tracked(tracked)
+        current.webhook_url = settings.get("webhook_url", "")
+        st.session_state[_SENTINEL_KEY] = current
+        return current.running
+
+    sentinel = live_watcher.start_sentinel(
+        tracked_matches=tracked,
+        sport="NFL",
+        webhook_url=settings.get("webhook_url", ""),
+        db_path=DATABASE_PATH,
+        interval=live_watcher.POLL_INTERVAL_SECONDS,
+    )
+    st.session_state[_SENTINEL_KEY] = sentinel
+    return sentinel.running
+
+
+# ---------------------------------------------------------------------------
+# Shared UI fragments
+# ---------------------------------------------------------------------------
+
+def _read_view_from_query() -> str:
+    """Bottom-nav links set ?view=<key>; sync into session_state once."""
+    qp = st.query_params
+    requested = str(qp.get("view", "")).lower()
+    if requested in VIEWS:
+        if st.session_state.get("current_view") != requested:
+            st.session_state["current_view"] = requested
+    elif "current_view" not in st.session_state:
+        st.session_state["current_view"] = "scan"
+    return st.session_state["current_view"]
+
+
+def _empty(title: str, note: str = "") -> None:
+    st.markdown(
+        '<div class="stratum-card" style="align-items:center;padding:34px 16px;">'
+        f'<div class="stratum-card-value" style="font-size:16px;">{ui_theme.esc(title)}</div>'
+        f'<div class="stratum-card-meta">{ui_theme.esc(note)}</div></div>',
+        unsafe_allow_html=True,
+    )
+
+
+# ---------------------------------------------------------------------------
+# VIEW: SCAN
+# ---------------------------------------------------------------------------
+
+def view_scan(settings: dict, sentinel_running: bool) -> None:
+    c_search, c_btn = st.columns([5, 1], gap="small")
+    with c_search:
+        match = st.text_input(
+            "Matchup", value="", placeholder="Chiefs @ Ravens",
+            label_visibility="collapsed", key="scan_match",
+        )
+    with c_btn:
+        st.write("")  # vertical nudge to align with the input
+        run = st.button("SCAN", type="primary", key="run_scan",
+                        disabled=not match.strip(), use_container_width=True)
+
+    sport = st.selectbox("Sport", SPORTS, index=0, key="scan_sport")
+
+    # Track toggle feeds the Sentinel watch-list.
+    track = st.toggle(
+        "Track with Sentinel (poll every 30s)",
+        value=(match.strip() in settings.get("tracked", [])) if match.strip() else False,
+        key="track_toggle", disabled=not match.strip(),
+    )
+    if match.strip():
+        now = match.strip()
+        tracked = list(settings.get("tracked", []))
+        if track and now not in tracked:
+            tracked.append(now)
+            settings["tracked"] = tracked
+            _save_settings(settings)
+            if sentinel_running and live_watcher.get_sentinel() is not None:
+                live_watcher.get_sentinel().set_tracked(tracked)
+        elif not track and now in tracked:
+            settings["tracked"] = [t for t in tracked if t != now]
+            _save_settings(settings)
+            if sentinel_running and live_watcher.get_sentinel() is not None:
+                live_watcher.get_sentinel().set_tracked(settings["tracked"])
+
+    st.session_state.setdefault("scan_filter", "ALL")
+    chip_cols = st.columns(len(FILTERS))
+    for i, opt in enumerate(FILTERS):
+        active = st.session_state["scan_filter"] == opt
+        if chip_cols[i].button(opt, key=f"fchip_{opt}", use_container_width=True,
+                               type="primary" if active else "secondary"):
+            st.session_state["scan_filter"] = opt
+
+    cached = st.session_state.get("scan_result")
+    if run:
+        scanner = MarketScanner()
+        with st.spinner("Scanning market board…"):
+            try:
+                rows = scanner.scan_match(match.strip(), sport=sport)
+                comparison = scanner.compare_books(rows)
+            except Exception as exc:  # graceful, never a blank page
+                st.error(f"Scanner failed gracefully: {exc}")
+                return
+        home_best, away_best = best_ml_pair(rows)
+        fair, prob_map = (None, {})
+        if home_best and away_best:
+            try:
+                fair, prob_map = build_fair_probs(home_best, away_best)
+            except ValueError as exc:
+                st.warning(f"Fair-prob baseline unavailable: {exc}")
+        from datetime import datetime, timezone
+        snap_hist = st.session_state.setdefault("snapshot_history", {})
+        signals = scan_signals_for_match(list(snap_hist.get(match.strip(), [])))
+        books = {}
+        for r in rows:
+            if r.get("market_type") == MARKET_ML and r.get("selection") in ("Home", "Away"):
+                slot = books.setdefault(r["bookmaker"], {})
+                key = "home_american" if r["selection"] == "Home" else "away_american"
+                slot.setdefault(key, r["american_odds"])
+        snap_hist.setdefault(match.strip(), []).append(
+            {"timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"), "books": books}
+        )
+        snap_hist[match.strip()] = snap_hist[match.strip()][-50:]
+        st.session_state["scan_result"] = {
+            "match": match.strip(), "rows": rows, "comparison": comparison,
+            "fair": fair, "prob_map": prob_map, "steam": signals["steam"],
+            "arb_pct": signals["arb_pct"],
+        }
+
+    result = st.session_state.get("scan_result")
+    if not result or result.get("match") != match.strip():
+        _empty("NO ACTIVE SCAN",
+               "Enter a matchup and press SCAN. Silence is data — we never fabricate a board.")
         return
-    scanner = MarketScanner()
-    with st.spinner(f"Scanning all markets for {match}…"):
-        try:
-            rows = scanner.scan_match(match, sport=sport)
-            comparison = scanner.compare_books(rows)
-        except Exception as exc:  # never crash the page
-            st.error(f"Scanner failed gracefully: {exc}")
-            return
 
+    rows = result["rows"]
     sources = {r.get("data_source") for r in rows}
     if sources == {"sample"}:
         st.warning(
-            "⚠️ SAMPLE DATA — live fetch unavailable (offline/blocked). These prices are "
-            "DEMO-ONLY placeholders labeled data_source='sample'. Stratum never presents "
-            "invented numbers as real. Verify at your book before acting.",
-            icon="🧪",
-        )
-    if not rows:
-        st.info("Empty state: no markets could be fetched for this match. Nothing invented.")
-        return
-
-    # Fair probs from the best-priced ML pair so EV ranking has a REAL baseline.
-    prob_map = {}
-    ml_rows = [r for r in rows if r.get("market_type") == "ML"]
-    home_best = away_best = None
-    for r in ml_rows:
-        if r.get("selection") == "Home" and (home_best is None or american_to_decimal(r["american_odds"]) > american_to_decimal(home_best)):
-            home_best = r["american_odds"]
-        if r.get("selection") == "Away" and (away_best is None or american_to_decimal(r["american_odds"]) > american_to_decimal(away_best)):
-            away_best = r["american_odds"]
-    fair = None
-    if home_best and away_best:
-        try:
-            fair, prob_map = build_fair_probs(home_best, away_best)
-        except ValueError as exc:
-            st.warning(f"Fair-prob baseline unavailable: {exc}")
-
-    ranked = rank_value_spots(rows, prob_map)
-    arb_by_selection = {}
-    for flag in comparison["arb_flags"]:
-        arb_by_selection[flag["side_a"]] = flag["arb_pct"]
-        arb_by_selection[flag["side_b"]] = flag["arb_pct"]
-
-    st.subheader(f"Top value spots — {len(ranked)} markets scanned ({sport}: {match})")
-    import pandas as pd
-    top10 = ranked[:10]
-    df = pd.DataFrame([{
-        "Market": r["market_type"], "Selection": r["selection"], "Book": r["bookmaker"],
-        "Odds": int(r["american_odds"]) if r["american_odds"] is not None else None,
-        "Line": r.get("line"), "EV %": r["ev_pct"] if r["ev_pct"] is not None else "Unknown",
-        "Arb %": arb_by_selection.get(r["selection"], 0.0), "Source": r.get("data_source"),
-    } for r in top10])
-
-    def _highlight(row):
-        green = float(row["Arb %"] or 0) > 0
-        return ["background-color: #123B2B; color: #2EE6A6" if green else ""] * len(row)
-    st.dataframe(df.style.apply(_highlight, axis=1), use_container_width=True, hide_index=True)
-
-    if comparison["stale_flags"]:
-        st.subheader("💤 Potential STALE lines (soft books lagging consensus)")
-        st.dataframe(pd.DataFrame(comparison["stale_flags"]), use_container_width=True, hide_index=True)
-    else:
-        st.caption("No stale-line discrepancies over threshold in this scan.")
-    if comparison["arb_flags"]:
-        st.success(f"💸 Arbitrage detected: {comparison['arb_flags']}")
-    else:
-        st.caption("No arbitrage margin across best opposing prices (implied sum ≥ 100%).")
-    if fair:
-        st.caption(
-            f"Baseline: best ML {int(home_best):+d}/{int(away_best):+d} → fair "
-            f"{fair['home'] * 100:.2f}% / {fair['away'] * 100:.2f}% (quant_engine, no-vig)."
+            "SAMPLE DATA — live feed unavailable. Prices below are DEMO placeholders "
+            "(data_source='sample'); verify at your book before acting."
         )
 
+    cards = opportunity_cards(rows, result["comparison"],
+                              {"prob_map": result["prob_map"]}, steam=result["steam"])
+    cards = filter_cards(cards, st.session_state["scan_filter"])
 
-def _tab_signals(sport: str, match: str):
-    """📊 Signals Dashboard — steam / RLM / arb feed for tracked games."""
-    st.subheader("Live signal feed")
-    if not match.strip():
-        st.info("Enter a match in the sidebar to track its signals.")
+    k1, k2, k3, k4 = st.columns(4, gap="small")
+    with k1:
+        ui_theme.render_metric_card("Markets Scanned", str(len(rows)), trend="flat",
+                                    meta=f"{result['match']} · {sport}")
+    with k2:
+        ev_top = next((c["ev_pct"] for c in cards if c["ev_pct"] is not None), None)
+        ui_theme.render_metric_card("Top Edge",
+                                    pct(ev_top) if ev_top is not None else "UNKNOWN",
+                                    delta=ev_top,
+                                    trend="up" if (ev_top or 0) > 0 else "flat",
+                                    meta="EV% vs no-vig fair")
+    with k3:
+        arb = result["arb_pct"]
+        ui_theme.render_metric_card("Arb Margin",
+                                    pct(arb, sign=False) if arb > 0 else "NONE",
+                                    trend="up" if arb > 0 else "flat",
+                                    meta="guaranteed %" if arb > 0 else "implied sum >= 100%")
+    with k4:
+        ui_theme.render_metric_card("Steam", "DETECTED" if result["steam"] else "QUIET",
+                                    trend="up" if result["steam"] else "flat",
+                                    meta=">=3 majors in sync")
+
+    ui_theme.section_label(f"OPPORTUNITIES — {len(cards)} SHOWN")
+    if not cards:
+        _empty("ZERO OPPORTUNITIES IN THIS FILTER", "Switch the filter chip or widen the scan.")
         return
+    for idx, c in enumerate(cards[:12]):
+        _opportunity_card(c, idx, settings)
 
-    scanner = MarketScanner()
-    try:
-        rows = scanner.scan_match(match, sport=sport)
-    except Exception as exc:
-        st.error(f"Scanner failed gracefully: {exc}")
-        return
 
-    # Build a snapshot from current best prices per side (real fetched quotes only).
-    books = {}
-    for r in rows:
-        if r.get("market_type") == "ML" and r.get("selection") in ("Home", "Away"):
-            b = books.setdefault(r["bookmaker"], {})
-            key = "home_american" if r["selection"] == "Home" else "away_american"
-            if key not in b:
-                b[key] = r["american_odds"]
-    from datetime import datetime, timezone
-    current = {"timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"), "books": books}
-
-    # Obsidian memory: previous scans persist snapshots for steam detection.
-    history = st.session_state.setdefault("snapshot_history", {})
-    prior = list(history.get(match, []))
-    signals = scan_signals_for_match(prior + [current])
-    history.setdefault(match, []).append(current)
-    history[match] = history[match][-50:]  # keep last 50 snapshots per game
-
-    cols = st.columns(3)
-    with cols[0]:
-        st.metric("🔥 Steam", "DETECTED" if signals["steam"] else "None")
-    with cols[1]:
-        st.metric("⚖️ RLM", "SHARP_ON_AWAY" if signals["rlm"] != "NONE" else "None")
-    with cols[2]:
-        st.metric("💸 Arb margin", f"{signals['arb_pct']:.2f}%" if signals["arb_pct"] > 0 else "0.00%")
-
-    if signals["notes"]:
-        for n in signals["notes"]:
-            st.write(n)
-    else:
-        st.caption("No signals right now — silence is data, we don't fabricate alerts.")
-
-    st.caption(
-        "First-run note: steam detection needs ≥2 timestamped snapshots inside a 5-min window; "
-        "re-scan after prices move. Public ticket % and opening lines come from live fetch only — "
-        "when unavailable they stay Unknown (manual fields below)."
+def _opportunity_card(c: dict, idx: int, settings: dict) -> None:
+    badges = ""
+    if c["arb"]:
+        badges += '<span class="stratum-badge stratum-badge-hot">ARB ' + pct(c["arb_pct"], sign=False) + "</span>"
+    if c["stale"]:
+        badges += '<span class="stratum-badge stratum-badge-stale">STALE</span>'
+    if c["steam"]:
+        badges += '<span class="stratum-badge stratum-badge-hot">STEAM</span>'
+    if c["sample"]:
+        badges += '<span class="stratum-badge stratum-badge-sample">SAMPLE</span>'
+    ev = c["ev_pct"]
+    ev_color = (COLORS["positive"] if (ev is not None and ev > 0)
+                else COLORS["negative"] if (ev is not None and ev < 0)
+                else COLORS["text_secondary"])
+    line_txt = "\u2014" if c["line"] is None else f"{c['line']:+.1f}"
+    st.markdown(
+        '<div class="stratum-opp">'
+        '<div class="stratum-opp-head">'
+        f'<span class="stratum-opp-game">{ui_theme.esc(c["game"])} — {ui_theme.esc(c["selection"])}</span>'
+        f'<span class="stratum-opp-market">{ui_theme.esc(c["market"])}</span></div>'
+        f'<div style="margin-top:6px">{badges}</div>'
+        '<div class="stratum-opp-grid">'
+        f'<div><div class="stratum-opp-cell-k">Best Odds</div>'
+        f'<div class="stratum-opp-cell-v">{fmt_odds(c["best_odds"])}</div></div>'
+        f'<div><div class="stratum-opp-cell-k">Fair Odds</div>'
+        f'<div class="stratum-opp-cell-v">{fmt_odds(c["fair_odds"])}</div></div>'
+        f'<div><div class="stratum-opp-cell-k">Line</div>'
+        f'<div class="stratum-opp-cell-v">{line_txt}</div></div>'
+        f'<div><div class="stratum-opp-cell-k">Edge EV</div>'
+        f'<div class="stratum-opp-cell-v" style="color:{ev_color}">'
+        f'{pct(ev) if ev is not None else "UNKNOWN"}</div></div>'
+        "</div>"
+        f'<div class="stratum-card-meta">{ui_theme.esc(c["book"])}</div>'
+        "</div>",
+        unsafe_allow_html=True,
     )
-    with st.expander("Manual signal inputs (only if you can SEE the data)"):
-        pub = st.number_input("Public ticket % on Home (0 = unknown)", min_value=0, max_value=100, value=0, step=1)
-        open_ml = st.number_input("Opening Home ML (American, 0 = unknown)", value=0, step=5)
-        cur_ml = st.number_input("Current Home ML (American, 0 = unknown)", value=0, step=5)
-        if pub and open_ml and cur_ml:
-            man = scan_signals_for_match([], public_ticket_pct_home=pub,
-                                         opening_home_american=open_ml, current_home_american=cur_ml)
-            st.write("Manual RLM check →", "⚖️ " + man["rlm"])
+    stake = round(float(settings.get("bankroll", 1000.0))
+                  * float(settings.get("kelly_fraction", 0.25)) * 0.05, 2)
+    bcol1, _ = st.columns([1, 3], gap="small")
+    with bcol1:
+        if st.button("PLACE BET",
+                     key=f"place_{idx}_{c['game']}_{c['market']}_{c['selection']}_{c['book']}",
+                     type="primary", use_container_width=True):
+            try:
+                bid = record_bet(c["game"], c["market"], c["selection"],
+                                 float(c["best_odds"]), stake,
+                                 data_source="sample" if c["sample"] else "live")
+                st.success(f"Bet #{bid} logged at {fmt_odds(c['best_odds'])} — audited against the close later.")
+            except (ValueError, KeyError) as exc:
+                st.error(str(exc))
 
 
-def _tab_clv():
-    """💰 Bankroll & CLV — log bets, settle them, audit long-term edge."""
-    st.subheader("Bet logger (Obsidian memory)")
-    with st.form("log_bet_form", clear_on_submit=True):
-        c1, c2, c3 = st.columns(3)
-        with c1:
+# ---------------------------------------------------------------------------
+# VIEW: PORTFOLIO (My Bets)
+# ---------------------------------------------------------------------------
+
+def view_portfolio(settings: dict) -> None:
+    bets = ledger_with_pnl(list_bets())
+    open_bets = [b for b in bets if b["status"] == "open"]
+    rep = get_performance_report(days=30)
+
+    m1, m2, m3, m4 = st.columns(4, gap="small")
+    with m1:
+        ui_theme.render_metric_card("Net P&L", money(rep["net_profit"], sign=True),
+                                    delta=rep["net_profit"],
+                                    meta=f"ROI {pct(rep['roi_pct'], sign=False)} · 30d")
+    with m2:
+        ui_theme.render_metric_card("Open Exposure", money(sum(b["stake"] for b in open_bets)),
+                                    trend="flat", meta=f"{len(open_bets)} live positions")
+    with m3:
+        avg_clv = rep["avg_clv_pct"]
+        ui_theme.render_metric_card("Avg CLV",
+                                    pct(avg_clv) if avg_clv is not None else "UNKNOWN",
+                                    delta=avg_clv,
+                                    meta=(f"beat close {rep['beat_close_rate_pct']:.0f}%"
+                                          if rep["beat_close_rate_pct"] is not None
+                                          else "needs closing lines"))
+    with m4:
+        ui_theme.render_metric_card("Win Rate",
+                                    pct(rep["win_rate_pct"], sign=False) if rep["n_settled"] else "0.0%",
+                                    trend="flat",
+                                    meta=f"{rep['n_settled']} settled · {rep['n_bets']} logged")
+
+    ui_theme.section_label("ACTIVE POSITIONS")
+    if not bets:
+        _empty("LEDGER EMPTY",
+               "Place from SCAN or record a manual bet below. The scoreboard starts empty — like every honest one.")
+    else:
+        df = pd.DataFrame([{
+            "ID": b["id"], "Game": b["match_id"], "Market": b["market"],
+            "Selection": b["selection"], "Placed": fmt_odds(b["odds_placed"]),
+            "Stake": money(b["stake"]), "Status": str(b["status"]).upper(),
+            "Close": fmt_odds(b.get("closing_odds")), "CLV": pct(b.get("clv_value")),
+            "P&L": money(b["profit"], sign=True),
+        } for b in bets])
+        st.dataframe(df, use_container_width=True, hide_index=True)
+
+        with st.expander("Settle / lock closing line"):
+            sc1, sc2, sc3 = st.columns([1, 1, 2], gap="small")
+            with sc1:
+                bid_in = st.number_input("Bet ID", min_value=1, step=1, key="settle_id")
+            with sc2:
+                close = st.number_input("Closing odds", value=0, step=5, key="settle_close",
+                                        help="American price at close. 0 = skip CLV.")
+            with sc3:
+                status = st.selectbox("Settle as", ["(keep)", "open", "won", "lost", "void"],
+                                      key="settle_status")
+            if st.button("APPLY", key="settle_apply", use_container_width=True):
+                try:
+                    if close:
+                        v = update_closing_line(int(bid_in), float(close))
+                        st.success(f"CLV {signed(v, suffix='%')} — "
+                                   f"{'beat the close' if v > 0 else 'behind the close'}")
+                    if status != "(keep)":
+                        settle_bet(int(bid_in), status)
+                        st.success(f"Bet #{int(bid_in)} set to {status.upper()}")
+                    st.rerun()
+                except (KeyError, ValueError) as exc:
+                    st.error(str(exc))
+
+    ui_theme.section_label("PERFORMANCE")
+    left, right = st.columns(2, gap="small")
+    with left:
+        st.plotly_chart(cumulative_profit_figure(bets), use_container_width=True, key="fig_pnl")
+    with right:
+        st.plotly_chart(clv_histogram_figure([b.get("clv_value") for b in bets]),
+                        use_container_width=True, key="fig_clv")
+
+    ui_theme.section_label("RECORD MANUAL BET")
+    with st.form("manual_bet_form", clear_on_submit=True):
+        fc1, fc2, fc3 = st.columns(3, gap="small")
+        with fc1:
             m = st.text_input("Match", placeholder="Chiefs @ Ravens")
-            market = st.selectbox("Market", ["ML", "Spread", "Total", "PlayerProps", "Alternates", "Halves", "Quarters"])
-        with c2:
+            market = st.selectbox("Market", ["ML", "Spread", "Total", "PlayerProps",
+                                             "Alternates", "Halves", "Quarters"])
+        with fc2:
             selection = st.text_input("Selection", placeholder="Home -3.5")
-            odds = st.number_input("Odds placed (American)", value=0, step=5, help="Real price you actually got. 0 = invalid.")
-        with c3:
-            stake = st.number_input("Stake ($)", min_value=0.0, value=0.0, step=10.0)
-            logged_from = st.selectbox("Data source", ["manual", "live", "sample"])
-        submitted = st.form_submit_button("Log bet")
+            odds = st.number_input("Odds placed (American)", value=0, step=5)
+        with fc3:
+            stake_in = st.number_input("Stake ($)", min_value=0.0, value=0.0, step=10.0)
+            source = st.selectbox("Data source", ["manual", "live", "sample"])
+        submitted = st.form_submit_button("RECORD BET", type="primary", use_container_width=True)
         if submitted:
             try:
                 if odds == 0:
                     raise ValueError("Odds of 0 are not a price — enter the American odds you got.")
-                bet_id = record_bet(m, market, selection, odds, stake, data_source=logged_from)
-                st.success(f"Logged bet #{bet_id}. Never guessed, always audited.")
+                new_id = record_bet(m, market, selection, odds, stake_in, data_source=source)
+                st.success(f"Logged bet #{new_id}. Never guessed, always audited.")
+                st.rerun()
             except (ValueError, KeyError) as exc:
                 st.error(str(exc))
 
-    st.subheader("Ledger")
-    bets = list_bets()
-    if not bets:
-        st.info("No bets logged yet. The scoreboard starts empty — like every honest one.")
+
+# ---------------------------------------------------------------------------
+# VIEW: ALERTS
+# ---------------------------------------------------------------------------
+
+def view_alerts(sentinel_running: bool) -> None:
+    alerts = live_watcher.list_alerts(limit=60)
+    ui_theme.section_label("SENTINEL FEED")
+    if not alerts:
+        _empty("NO ALERTS YET",
+               "The Sentinel fires on >=1.5 pt line shifts, live arbs and steam. Silence is data.")
+        if not sentinel_running:
+            st.caption("Enable the Live Sentinel in SETTINGS to start monitoring tracked games.")
         return
-    import pandas as pd
-    settled = []
-    for b in bets:
-        row = dict(b)
-        if row["status"] == "won" and row.get("odds_placed"):
-            row["profit"] = round(row["stake"] * (american_to_decimal(float(row["odds_placed"])) - 1.0), 2)
-        elif row["status"] == "lost":
-            row["profit"] = -float(row["stake"])
-        else:
-            row["profit"] = 0.0
-        settled.append(row)
-    st.dataframe(pd.DataFrame(settled)[[
-        "id", "match_id", "market", "selection", "odds_placed", "stake",
-        "status", "closing_odds", "clv_value", "profit", "created_at",
-    ]], use_container_width=True, hide_index=True)
+    sev_color = {"alert": COLORS["negative"], "warning": COLORS["warning"],
+                 "info": COLORS["text_secondary"]}
+    for a in alerts:
+        color = sev_color.get(a["severity"], COLORS["text_secondary"])
+        delivered = "\u25CF PUSHED" if a["delivered"] else "\u25CB LOCAL ONLY"
+        st.markdown(
+            '<div class="stratum-card" style="flex-direction:row;justify-content:space-between;'
+            'align-items:center;gap:12px;margin-bottom:8px;">'
+            f'<div><div class="stratum-card-delta" style="color:{color};font-size:14px;">'
+            f'{ui_theme.esc(a["kind"].upper())}</div>'
+            f'<div style="font-family:{ui_theme.FONTS["mono"]};font-size:13px;'
+            f'color:{COLORS["text_primary"]};">{ui_theme.esc(a["message"])}</div></div>'
+            f'<div style="text-align:right;white-space:nowrap;"><div class="stratum-card-meta">{delivered}</div>'
+            f'<div class="stratum-card-meta">{ui_theme.esc(a["created_at"])}</div></div>'
+            "</div>",
+            unsafe_allow_html=True,
+        )
 
-    with st.expander("Update a bet (closing line / result)"):
-        bid = st.number_input("Bet id", min_value=1, step=1)
-        close = st.number_input("Closing odds (American, 0 = skip)", value=0, step=5)
-        status = st.selectbox("Settle as", ["(keep)", "open", "won", "lost", "void"])
-        if st.button("Apply"):
-            try:
-                if close:
-                    v = update_closing_line(int(bid), float(close))
-                    st.success(f"CLV recorded: {v:+.2f}% ({'beat the close 🟢' if v > 0 else 'behind the close 🔴'})")
-                if status != "(keep)":
-                    settle_bet(int(bid), status)
-                    st.success(f"Bet #{int(bid)} set to {status}.")
-            except (KeyError, ValueError) as exc:
-                st.error(str(exc))
 
-    st.subheader("Performance (last 30 days)")
-    rep = get_performance_report(days=30)
-    if not rep["has_data"]:
-        st.info("No bets in window — nothing to report yet.")
-        return
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("ROI", f"{rep['roi_pct']:.1f}%", f"{rep['net_profit']:+,.0f}$")
-    m2.metric("Win rate", f"{rep['win_rate_pct']:.1f}%", f"{rep['n_settled']} settled")
-    m3.metric("Avg CLV", f"{rep['avg_clv_pct']:+.2f}%" if rep["avg_clv_pct"] is not None else "Unknown",
-              f"beat close {rep['beat_close_rate_pct']:.0f}%" if rep["beat_close_rate_pct"] is not None else "needs closing lines")
-    m4.metric("Bets logged", rep["n_bets"], f"${rep['total_staked']:,.0f} staked")
-    best = rep["best_market"]
-    worst = rep["worst_market"]
-    if best and worst:
-        st.caption(f"Best market: {best['market']} ({best['roi_pct']:+.1f}% ROI) · Worst: {worst['market']} ({worst['roi_pct']:+.1f}% ROI)")
+# ---------------------------------------------------------------------------
+# VIEW: SETTINGS
+# ---------------------------------------------------------------------------
 
-    left, right = st.columns(2)
-    with left:
-        st.plotly_chart(report.chart_cumulative_profit(settled), use_container_width=True)
-    with right:
-        st.plotly_chart(report.chart_clv_histogram([b["clv_value"] for b in bets]), use_container_width=True)
+def view_settings(settings: dict) -> None:
+    ui_theme.section_label("LIVE SENTINEL")
+    enabled = st.toggle("Enable Live Sentinel", value=bool(settings.get("sentinel_enabled")),
+                        key="set_enabled",
+                        help="Background thread polling tracked games every 30 seconds.")
+    webhook = st.text_input(
+        "Push Webhook URL (Discord or Telegram bot)",
+        value=settings.get("webhook_url", ""), key="set_webhook",
+        placeholder="https://discord.com/api/webhooks/... or https://api.telegram.org/bot<token>/sendMessage",
+        type="password",
+    )
+    st.caption(
+        f"Cadence: {live_watcher.POLL_INTERVAL_SECONDS}s · shift threshold: "
+        f"{live_watcher.LINE_SHIFT_THRESHOLD} pts · every alert is stored in the SQLite "
+        f"'alerts' table regardless of delivery."
+    )
 
+    ui_theme.section_label("BANKROLL MANAGEMENT")
+    bankroll = st.number_input("Bankroll ($)", min_value=1.0,
+                               value=float(settings.get("bankroll", 1000.0)),
+                               step=50.0, key="set_bankroll")
+    kelly = st.slider("Kelly fraction applied to stakes", 0.05, 1.0,
+                      float(settings.get("kelly_fraction", 0.25)), step=0.05, key="set_kelly",
+                      help="0.25 = quarter-Kelly sizing recommended for live bankrolls.")
+
+    ui_theme.section_label("APPEARANCE")
+    theme = st.radio("Theme", ["dark", "light"], horizontal=True,
+                     index=0 if settings.get("theme", "dark") == "dark" else 1,
+                     key="set_theme")
+
+    ui_theme.section_label("SENTINEL WATCHLIST")
+    st.caption("Add matchups from the SCAN tab by toggling 'Track with Sentinel'.")
+    tracked = list(settings.get("tracked", []))
+    if tracked:
+        removed_key = None
+        tc = st.columns([4, 1] * min(len(tracked), 3))
+        for i, t in enumerate(tracked[:3]):
+            with tc[i * 2]:
+                st.markdown('<div class="stratum-card"><div class="stratum-card-value" '
+                            f'style="font-size:14px">{ui_theme.esc(t)}</div></div>',
+                            unsafe_allow_html=True)
+            with tc[i * 2 + 1]:
+                if st.button("REMOVE", key=f"untrack_{t}", use_container_width=True):
+                    removed_key = t
+        if removed_key:
+            settings["tracked"] = [t for t in tracked if t != removed_key]
+            _save_settings(settings)
+            if live_watcher.get_sentinel() is not None:
+                live_watcher.get_sentinel().set_tracked(settings["tracked"])
+            st.rerun()
+        if len(tracked) > 3:
+            st.caption(f"+{len(tracked) - 3} more tracked.")
+
+    dirty = (
+        enabled != bool(settings.get("sentinel_enabled"))
+        or webhook != settings.get("webhook_url")
+        or bankroll != settings.get("bankroll")
+        or kelly != settings.get("kelly_fraction")
+        or theme != settings.get("theme")
+    )
+    if dirty:
+        settings.update(sentinel_enabled=enabled, webhook_url=webhook, bankroll=bankroll,
+                        kelly_fraction=kelly, theme=theme)
+        _save_settings(settings)
+        sync_sentinel(settings, force_restart=True)
+        st.toast("Settings saved")
+        st.rerun()
+
+    ui_theme.section_label("DELIVERY TEST")
+    dcol1, dcol2 = st.columns([1, 3], gap="small")
+    with dcol1:
+        if st.button("SEND TEST ALERT", key="test_alert", disabled=not webhook,
+                     use_container_width=True):
+            target = live_watcher.get_sentinel() or live_watcher.SentinelThread(
+                webhook_url=webhook, db_path=DATABASE_PATH)
+            ok = target.send_alert("TEST: Stratum delivery check", severity="info", kind="test")
+            (st.success("Webhook accepted the alert.") if ok
+             else st.error("Webhook rejected/unreachable — check the URL."))
+    with dcol2:
+        st.caption("Free push proxy: create a Discord channel webhook (or a Telegram bot via "
+                   "@BotFather) and paste the URL above. Alerts reach your phone even with the "
+                   "app closed.")
+
+
+# ---------------------------------------------------------------------------
+# App shell
+# ---------------------------------------------------------------------------
 
 def render() -> None:
-    st.set_page_config(page_title="Stratum v0.1", page_icon="⛰️", layout="wide")
-    st.title("⛰️ Stratum v0.1 — Quant Engine")
-    st.caption("Free-tier edge: extract real prices → strip the vig → size with Kelly → audit against the close. "
-               "The AI only reads; the math is ours. Stratum doesn't guess; it verifies against market makers.")
-
-    with st.sidebar:
-        st.header("Setup")
-        sport = st.selectbox("Sport", SPORTS, help="Filters scanner results efficiently")
-        match = st.text_input("Match (Home @ Away)", placeholder="Chiefs @ Ravens")
-        st.subheader("Weather (optional)")
-        col1, col2 = st.columns(2)
-        with col1:
-            lat = st.number_input("Lat", value=None, format="%.4f")
-        with col2:
-            lon = st.number_input("Lon", value=None, format="%.4f")
-
-    tab_scan, tab_sig, tab_clv, tab_old = st.tabs(
-        ["🔍 Deep Scan", "📊 Signals Dashboard", "💰 Bankroll & CLV", "🎯 Single-Market Analyze"]
+    st.set_page_config(
+        page_title="Stratum", layout="wide", initial_sidebar_state="collapsed",
+        menu_items={"Get Help": None, "Report a bug": None,
+                    "About": "# Stratum\nQuant edge terminal."},
     )
+    settings = ensure_app_boot()
+    st.markdown(ui_theme.inject_css(theme=settings.get("theme", "dark")), unsafe_allow_html=True)
+
+    current_view = _read_view_from_query()
+    sentinel_running = sync_sentinel(settings)
+
+    ui_theme.render_header("STRATUM", "QUANT EDGE TERMINAL", sentinel_running)
+
     try:
-        with tab_old:
-            _tab_analyze(sport, match, lat, lon)
-        with tab_scan:
-            _tab_deep_scan(sport, match)
-        with tab_sig:
-            _tab_signals(sport, match)
-        with tab_clv:
-            _tab_clv()
-    except BrainUnavailableError as exc:
-        st.warning(f"AI brain unavailable ({exc}) — falling back to manual entry. The page stays usable.")
-    except Exception as exc:  # the page must ALWAYS remain usable
-        logging.getLogger("stratum.ui").exception("UI error")
-        st.error(f"Unexpected error (degraded to manual mode): {exc}")
+        if current_view == "portfolio":
+            view_portfolio(settings)
+        elif current_view == "alerts":
+            view_alerts(sentinel_running)
+        elif current_view == "settings":
+            view_settings(settings)
+        else:
+            view_scan(settings, sentinel_running)
+    except Exception as exc:  # the app must ALWAYS remain usable
+        logger.exception("UI error")
+        st.error(f"Unexpected error (degraded mode): {exc}")
+
+    ui_theme.render_bottom_nav(current_view)
 
 
 if _HAVE_STREAMLIT:
