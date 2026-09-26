@@ -1,7 +1,7 @@
 streamlit
 plotly
 requests
-bs4
+beautifulsoup4
 python-dotenv
 pytest
 groq
