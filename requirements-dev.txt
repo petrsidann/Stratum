@@ -1,3 +1,8 @@
-# Local development / CI only — NOT installed on Streamlit Cloud.
+# Local development / CI only — NOT installed by the scan workflow.
 -r requirements.txt
 pytest==9.1.1
+# Legacy interactive Streamlit shell (main.py) is RETIRED from production
+# (Actions + Pages is the deployment target) but kept importable for local
+# exploration and its test suite: streamlit run main.py
+streamlit==1.64.0
+plotly==7.1.0

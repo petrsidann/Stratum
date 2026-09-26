@@ -1,8 +1,10 @@
 """Stratum configuration — loads environment variables / secrets safely.
 
 Secret resolution order (first non-empty wins):
-  1. ``st.secrets``  — Streamlit Cloud's Secrets manager (.streamlit/secrets.toml)
-  2. ``os.environ``  — plain env vars / local .env via python-dotenv
+  1. ``os.environ``  — GitHub Actions repo Secrets (injected as env vars by
+     .github/workflows/scan-engine.yml), plain shell env, or local .env
+  2. ``st.secrets``  — legacy shim for the retired Streamlit shell (main.py);
+     harmless outside a Streamlit runtime
 
 Every accessor returns a safe default instead of raising when a variable is
 missing, so the app can boot in degraded mode without crashing — even with
@@ -40,7 +42,7 @@ def _streamlit_secret(key: str) -> str:
 
 def get_env(key: str, default: str = "") -> str:
     """Return a secret: Streamlit secrets first, then os.environ, then default."""
-    value = _streamlit_secret(key) or os.getenv(key)
+    value = os.getenv(key) or _streamlit_secret(key)
     return value if value not in (None, "") else default
 
 

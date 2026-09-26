@@ -112,10 +112,10 @@ class TestUiTheme:
         head = ui_theme.header_html("STRATUM", "QUANT EDGE TERMINAL", sentinel_running=True)
         assert "stratum-dot-on" in head and "STRATUM" in head
         nav = ui_theme.bottom_nav_html("scan")
-        for label in ("SCAN", "PORTFOLIO", "ALERTS", "SETTINGS"):
+        for label in ("SCAN", "AUDIT", "PORTFOLIO", "ALERTS", "SETTINGS"):
             assert label in nav
         assert '<a class="stratum-nav-btn active" href="?view=scan"' in nav
-        assert nav.count("<svg") == 4  # icons are SVG, never emoji
+        assert nav.count("<svg") == 5  # icons are SVG, never emoji
 
     def test_no_emoji_anywhere_in_design_system_output(self):
         blob = (ui_theme.inject_css()
@@ -199,8 +199,12 @@ class TestSentinelDetection:
         first = live_watcher.start_sentinel(["A @ B"], db_path=tmp_db,
                                             scanner=FakeScanner(), interval=0.05)
         assert live_watcher.get_sentinel() is first and first.running
+        dup = live_watcher.start_sentinel(["C @ D"], db_path=tmp_db,
+                                          scanner=FakeScanner(), interval=0.05)
+        assert dup is first                          # idempotent: no double-spawn
         second = live_watcher.start_sentinel(["C @ D"], db_path=tmp_db,
-                                             scanner=FakeScanner(), interval=0.05)
+                                             scanner=FakeScanner(), interval=0.05,
+                                             restart=True)
         assert not first.is_alive()                  # old one stopped cleanly
         assert live_watcher.get_sentinel() is second
         live_watcher.stop_sentinel()
@@ -295,8 +299,8 @@ class TestAppShellInit:
         assert live_watcher.get_sentinel() is None
 
     def test_query_param_view_whitelist(self):
-        assert set(ui_theme.DEFAULT_NAV_ORDER) == {"SCAN", "PORTFOLIO", "ALERTS", "SETTINGS"}
-        assert set(main.VIEWS) == {"scan", "portfolio", "alerts", "settings"}
+        assert set(ui_theme.DEFAULT_NAV_ORDER) == {"SCAN", "AUDIT", "PORTFOLIO", "ALERTS", "SETTINGS"}
+        assert set(main.VIEWS) == {"scan", "audit", "portfolio", "alerts", "settings"}
 
     def test_module_imports_cleanly_headless(self):
         # `import main` at module top already executed everything except the

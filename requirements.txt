@@ -1,13 +1,14 @@
-# Stratum — runtime dependencies for Streamlit Cloud.
-# EXACT pins only: share.streamlit.io builds this file verbatim; any version
-# drift breaks deploy reproducibility. No wildcards, no minimums.
-# Dev tooling (pytest) lives in requirements-dev.txt so the Cloud image
-# stays small.
-streamlit==1.64.0
-pandas==2.3.1
-plotly==7.1.0
+# Stratum — headless quant engine (GitHub Actions "Ghost Server").
+# EXACT pins only: the scheduled workflow builds this file verbatim on every
+# run; any version drift breaks reproducibility of committed data.
+# GUI stacks (streamlit, plotly) were REMOVED for the Actions+Pages migration —
+# the frontend is static React (see frontend/package.json), so the deploy
+# footprint stays minimal: network + parsing + math only.
 requests==2.32.4
 beautifulsoup4==4.13.4
 python-dotenv==1.1.1
+pandas==2.3.1
+numpy==2.3.1
+# Optional LLM garnish (insights degrade gracefully without keys/packages).
 groq==1.7.0
 google-genai==2.25.0
