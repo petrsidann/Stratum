@@ -1,1 +1,6 @@
-(empty)
+# Compiled and cache files
+__pycache__/
+*.pyc
+
+# Cache directories
+.cache/
