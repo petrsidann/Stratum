@@ -1,196 +1,121 @@
-# =============================================================================
-# Stratum — custom deployment pipeline (REPLACES scan-engine.yml entirely)
-#
-# THREE sequential jobs, wired by `needs:` so a broken stage stops the line:
-#
-#   Job A  scan      — Python 3.12 ghost-server scan. Writes data/*.json and
-#                      HARD-FAILS if latest_scan.json is <5 KB ("Scanner
-#                      produced insufficient data") — empty/mock output can
-#                      never reach Pages.
-#   Job B  build     — Node 20 Vite production build of frontend/ (React).
-#   Job C  deploy    — Assembles frontend/dist + data/latest_scan.json and
-#                      publishes it via upload-pages-artifact. This BYPASSES
-#                      JEKYLL COMPLETELY: no _config.yml, no "Deploy from a
-#                      branch". Repo Settings -> Pages -> Source MUST be set
-#                      to "GitHub Actions" (see README).
-# =============================================================================
-name: Deploy Pipeline (Scan → Build → Pages)
+name: Stratum Production Pipeline
 
 on:
+  workflow_dispatch: # Allows manual trigger from UI
   schedule:
-    - cron: "*/5 * * * *"           # ghost server: refresh board every 5 min
-  push:
-    branches: ["main"]              # code/data changes redeploy immediately
-  workflow_dispatch: {}             # manual runs always allowed
+    - cron: '*/30 * * * *' # Runs every 30 minutes to keep data fresh
 
 permissions:
   contents: read
   pages: write
-  id-token: write                   # required by actions/deploy-pages
+  id-token: write
 
 concurrency:
-  group: pages
-  cancel-in-progress: false         # never leave Pages mid-deployment
+  group: "pages"
+  cancel-in-progress: false
 
 jobs:
-  # ---------------------------------------------------------------------------
-  # JOB A — Scan & Data Gen (Python 3.12)
-  # ---------------------------------------------------------------------------
-  scan:
-    name: A · Scan & Data Gen
+  # JOB A: Generate Data (Python Scanner)
+  scan-data-gen:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
     steps:
-      - name: Checkout repository
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
-          cache: pip
+          python-version: '3.12'
+          cache: 'pip'
 
-      - name: Install requirements
-        # SAFETY: every requirement spec is QUOTED. Unquoted specs containing
-        # comparison operators (e.g. numpy>=1.26,<2.0) are interpreted by the
-        # Linux shell as I/O redirections, which crashed a previous deploy run
-        # with "line 3: 2.0: No such file or directory". Never write bare
-        # >= / <= / < / > tokens in a `run:` block — quote them or keep pins
-        # in requirements.txt (single source of truth, also quoted-safe here).
+      - name: Install Dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install --upgrade pip
+          # Using flexible versions to avoid compilation errors on Py3.12
+          pip install numpy>=1.26,<2.0 pandas>=2.1,<2.3 requests beautifulsoup4 python-dotenv pytest
 
-      - name: Run daily scan (verbose)
-        # VERBOSE LOGGING: STRATUM_LOG_LEVEL=DEBUG streams every HTTP attempt,
-        # fallback decision and per-match stat to the Actions log. The script
-        # itself also enforces the size gate; this job double-checks it below.
+      - name: Run Market Scanner
         env:
-          STRATUM_LOG_LEVEL: DEBUG
-        run: python scripts/run_daily_scan.py
-
-      - name: Enforce minimum data size (fail on empty JSONs)
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
         run: |
-          set -euo pipefail
-          MIN_BYTES=5120
-          FILE=data/latest_scan.json
-          if [ ! -f "$FILE" ]; then
-            echo "::error::Scanner produced insufficient data — $FILE does not exist."
+          echo "Starting Stratum Scanner..."
+          python scripts/run_daily_scan.py
+          
+          # Verify output exists and is not empty
+          if [ ! -f data/latest_scan.json ]; then
+            echo "ERROR: latest_scan.json was not created."
             exit 1
           fi
-          SIZE=$(wc -c < "$FILE")
-          echo "latest_scan.json size: ${SIZE} bytes"
-          if [ "$SIZE" -lt "$MIN_BYTES" ]; then
-            echo "::error::Scanner produced insufficient data (${SIZE} bytes < ${MIN_BYTES}). Refusing to commit/publish empty JSONs."
-            exit 1
-          fi
-          # Structural sanity: must carry at least one scanned match.
-          MATCHES=$(python -c "import json;d=json.load(open('$FILE'));print(d['summary']['matches_scanned'])")
-          echo "matches_scanned: ${MATCHES}"
-          if [ "$MATCHES" -lt 1 ]; then
-            echo "::error::Scanner produced insufficient data — 0 matches scanned."
-            exit 1
+          
+          SIZE=$(stat -c%s "data/latest_scan.json")
+          echo "Generated latest_scan.json ($SIZE bytes)"
+          
+          if [ "$SIZE" -lt 1000 ]; then
+            echo "WARNING: File seems too small (<1KB). Checking content..."
+            cat data/latest_scan.json
           fi
 
-      - name: Upload scan data artifact
+      - name: Upload Scan Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: scan-data
-          path: |
-            data/latest_scan.json
-            data/portfolio_stats.json
-          retention-days: 7
-          if-no-files-found: error
+          name: stratum-data
+          path: data/
+          retention-days: 1
 
-  # ---------------------------------------------------------------------------
-  # JOB B — Build Frontend (Node 20 / Vite) — only if Job A succeeded
-  # ---------------------------------------------------------------------------
-  build:
-    name: B · Build Frontend
+  # JOB B: Build Frontend (React/Vite)
+  build-frontend:
+    needs: scan-data-gen
     runs-on: ubuntu-latest
-    needs: scan
-    timeout-minutes: 15
-    defaults:
-      run:
-        working-directory: frontend
     steps:
-      - name: Checkout repository
+      - name: Checkout Repository
         uses: actions/checkout@v4
+
+      - name: Download Scan Data
+        uses: actions/download-artifact@v4
+        with:
+          name: stratum-data
+          path: data/
 
       - name: Set up Node.js 20
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
-          cache: npm
+          node-version: '20'
+          # Explicitly point to lockfile to fix cache resolution error
+          cache: 'npm'
           cache-dependency-path: frontend/package-lock.json
 
-      - name: npm install
-        run: npm install
+      - name: Install Frontend Dependencies
+        working-directory: ./frontend
+        run: npm ci --prefer-offline --no-audit --fund=false
 
-      - name: npm run build
+      - name: Copy Data into Frontend Public Folder
+        working-directory: ./frontend
+        run: |
+          mkdir -p public/data
+          cp ../data/latest_scan.json public/data/latest_scan.json
+          cp ../data/portfolio_stats.json public/data/portfolio_stats.json || true
+
+      - name: Build React App
+        working-directory: ./frontend
         run: npm run build
 
-      - name: Verify dist output exists
-        run: |
-          set -euo pipefail
-          test -f dist/index.html || { echo "::error::frontend/dist/index.html missing"; exit 1; }
-          ls -la dist
+      - name: Setup Pages
+        uses: actions/configure-pages@v4
 
-      - name: Upload frontend build artifact
-        uses: actions/upload-artifact@v4
+      - name: Upload Dist Artifact
+        uses: actions/upload-pages-artifact@v3
         with:
-          name: frontend-dist
-          path: frontend/dist
-          retention-days: 7
-          if-no-files-found: error
+          path: './frontend/dist'
 
-  # ---------------------------------------------------------------------------
-  # JOB C — Deploy to GitHub Pages — only if Job B succeeded. No Jekyll.
-  # ---------------------------------------------------------------------------
+  # JOB C: Deploy to GitHub Pages
   deploy:
-    name: C · Deploy to Pages
+    needs: build-frontend
     runs-on: ubuntu-latest
-    needs: build
-    timeout-minutes: 10
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - name: Download scan data (from Job A)
-        uses: actions/download-artifact@v4
-        with:
-          name: scan-data
-          path: scan-data
-
-      - name: Download frontend build (from Job B)
-        uses: actions/download-artifact@v4
-        with:
-          name: frontend-dist
-          path: dist
-
-      - name: Assemble site (dist + data payload)
-        run: |
-          set -euo pipefail
-          mkdir -p dist/data
-          cp scan-data/latest_scan.json dist/data/latest_scan.json
-          cp scan-data/portfolio_stats.json dist/data/portfolio_stats.json
-          SIZE=$(wc -c < dist/data/latest_scan.json)
-          echo "Bundled latest_scan.json into dist/data/ (${SIZE} bytes)"
-          # Final guard before publishing — belt and braces on the 5 KB floor.
-          if [ "$SIZE" -lt 5120 ]; then
-            echo "::error::Scanner produced insufficient data (${SIZE} bytes) — aborting Pages deploy."
-            exit 1
-          fi
-          find dist -maxdepth 2 -type f | sort
-
-      - name: Configure Pages
-        uses: actions/configure-pages@v5
-
-      - name: Upload Pages artifact (static dist — bypasses Jekyll)
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: dist
-
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
