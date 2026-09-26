@@ -1,14 +1,19 @@
-"""Stratum v0.2 — Production mobile-first PWA shell (Phase 4).
+"""Stratum v0.3 — Production mobile-first PWA shell (Phase 5).
 
 Native-app architecture on Streamlit:
   * App chrome   : ui_theme.inject_css() restyles every widget; default
                    header/menu/footer are hidden. Dark fintech palette,
                    Inter labels + Roboto Mono data, zero emojis.
-  * Navigation   : fixed bottom tab bar [SCAN] [PORTFOLIO] [ALERTS]
-                   [SETTINGS]. Tabs navigate via ?view=<key> links (works
-                   under Streamlit's iframe CSP where JS injection does not);
-                   main.py syncs the query param into session_state so all
-                   other widgets keep their state across navigation.
+  * Navigation   : fixed bottom tab bar [SCAN] [AUDIT] [PORTFOLIO]
+                   [ALERTS] [SETTINGS]. Tabs navigate via ?view=<key> links
+                   (works under Streamlit's iframe CSP where JS injection does
+                   not); main.py syncs the query param into session_state so
+                   all other widgets keep their state across navigation.
+  * Deep engine  : Phase 5 adds the 200-Market Expander (player props /
+                   derivatives), the Contextual Reasoning Layer (LLM "why"
+                   text per card), the Immutable Audit Ledger (every scan is
+                   sealed in SQLite with UUID + hashes) and the Confidence
+                   Scorer (Book Agreement > Edge > Recency, capped at 95).
   * Live layer   : src.live_watcher.SentinelThread runs in the background at
                    a 30s cadence, diffs odds against SQLite snapshots and
                    pushes phone alerts through a Discord/Telegram webhook.
@@ -40,11 +45,19 @@ import plotly.graph_objects as go
 
 from config import DATABASE_PATH, get_env
 from src import report, scraper, ui_theme
+from src.audit_ledger import (
+    ImmutableRecordError, get_scan, ledger_metrics, list_scans, log_scan,
+    market_win_rate, resolve_scan, sha256_of,
+)
 from src.clv_auditor import (
     get_performance_report, list_bets, record_bet, settle_bet, update_closing_line,
 )
+from src.confidence_scorer import (
+    DEFAULT_MIN_CONFIDENCE, confidence_band, calculate_confidence, passes_threshold,
+)
 from src.database import init_db
 from src import live_watcher
+from src.market_expander import MarketExpander
 from src.market_scanner import MARKET_ML, MARKET_PROPS, MarketScanner
 from src.quant_engine import (
     american_to_decimal,
@@ -55,13 +68,18 @@ from src.quant_engine import (
     remove_vig_two_way,
     vig_pct_two_way,
 )
+from src.reasoning_engine import FALLBACK_INSIGHT, generate_insight
 from src.signal_detector import find_arbitrage_opportunities, scan_signals_for_match
 from src.ui_theme import COLORS, fmt_odds, money, pct, signed
 
 SPORTS = ["NFL", "NBA", "MLB", "Soccer", "Tennis"]
-VIEWS = ["scan", "portfolio", "alerts", "settings"]
+VIEWS = ["scan", "audit", "portfolio", "alerts", "settings"]
 FILTERS = ["ALL", "STEAM", "ARB", "PROPS"]
 DEFAULT_WEBHOOK = get_env("STRATUM_WEBHOOK")
+
+# Process-wide Phase 5 singletons: the expander's TTL cache must survive
+# Streamlit reruns, so it lives at module scope (same pattern as Sentinel).
+_EXPANDER = MarketExpander()
 
 # ---------------------------------------------------------------------------
 # Pure analysis core (no Streamlit, no network) — unit-tested in
