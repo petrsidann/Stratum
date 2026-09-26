@@ -1,6 +1,6 @@
-# Compiled and cache files
+# Compiled and build artifacts
 __pycache__/
 *.pyc
 
-# Cache directories
+# Cache and temporary files
 .cache/
