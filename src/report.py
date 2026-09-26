@@ -148,3 +148,70 @@ def chart_rlm(public_pct: float, line_dir: str) -> go.Figure:
             font=dict(color=GREY, size=12),
         )
     return fig
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 charts (Bankroll & CLV tab). Pure drawing — every value arrives
+# pre-computed by quant_engine / clv_auditor.
+# ---------------------------------------------------------------------------
+
+def chart_cumulative_profit(bets: list) -> go.Figure:
+    """Cumulative settled profit vs time from bets_log rows (dicts).
+
+    Open/void bets are skipped (no fabricated results). Profit per bet must
+    already be reflected in each row's ``profit`` key when provided; we only
+    sum and cumulate — no odds math here.
+    """
+    xs, ys = [], []
+    running = 0.0
+    for b in sorted(bets or [], key=lambda r: str(r.get("created_at") or "")):
+        if b.get("status") not in ("won", "lost"):
+            continue
+        running += float(b.get("profit", 0.0))
+        xs.append(str(b.get("created_at") or "?"))
+        ys.append(round(running, 2))
+    fig = go.Figure()
+    if xs:
+        fig.add_trace(go.Scatter(
+            x=xs, y=ys, mode="lines+markers", name="Cumulative P/L",
+            line=dict(color=GREEN if ys[-1] >= 0 else RED, width=2.5),
+            marker=dict(size=7),
+        ))
+        fig.add_hline(y=0, line_dash="dot", line_color=GREY)
+    else:
+        fig.add_trace(go.Scatter(x=[], y=[], mode="lines", name="No settled bets yet"))
+    _base_layout(fig, "Cumulative Profit vs Time")
+    fig.update_xaxes(title="Bet date")
+    fig.update_yaxes(title="$ P/L")
+    return fig
+
+
+def chart_clv_histogram(clv_values: list) -> go.Figure:
+    """Distribution of per-bet CLV% — the honest scoreboard (Sec 1, Concept #2)."""
+    vals = [float(v) for v in (clv_values or []) if v is not None]
+    fig = go.Figure()
+    if vals:
+        # Bucket into bins (grouping only — no financial math).
+        lo, hi = min(vals), max(vals)
+        nbins = max(5, min(12, len(vals)))
+        width = (hi - lo) / nbins if hi > lo else 1.0
+        edges = [lo + i * width for i in range(nbins + 1)]
+        counts = [0] * nbins
+        for v in vals:
+            idx = min(int((v - lo) / width), nbins - 1) if width else 0
+            counts[idx] += 1
+        centers = [(edges[i] + edges[i + 1]) / 2 for i in range(nbins)]
+        fig.add_trace(go.Bar(
+            x=centers, y=counts,
+            marker_color=[GREEN if c > 0 else RED for c in centers],
+            name="Bets",
+        ))
+        avg = sum(vals) / len(vals)
+        fig.add_vline(x=avg, line_dash="dash", line_color=GREY,
+                      annotation_text=f"Avg {avg:+.2f}%", annotation_font_color="#E6E9EF")
+    else:
+        fig.add_trace(go.Bar(x=[], y=[], name="No closing lines recorded yet"))
+    _base_layout(fig, f"CLV Distribution — {len(vals)} bets beat/miss the close")
+    fig.update_xaxes(title="CLV %")
+    fig.update_yaxes(title="# Bets")
+    return fig

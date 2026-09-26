@@ -35,6 +35,30 @@ CREATE TABLE IF NOT EXISTS bets (
     kelly_stake REAL,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
+
+-- Phase 3: Obsidian memory for the CLV auditor + scanner history.
+CREATE TABLE IF NOT EXISTS bets_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    match_id TEXT NOT NULL,
+    market TEXT NOT NULL,
+    selection TEXT NOT NULL,
+    odds_placed REAL NOT NULL,
+    stake REAL NOT NULL,
+    status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','won','lost','void')),
+    closing_odds REAL,
+    clv_value REAL,
+    data_source TEXT DEFAULT 'manual',
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS scans (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    match_id TEXT NOT NULL,
+    sport TEXT,
+    payload_json TEXT NOT NULL,
+    data_source TEXT DEFAULT 'sample',
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
 """
 
 
@@ -47,10 +71,20 @@ def get_connection(db_path: Optional[str] = None) -> sqlite3.Connection:
 
 
 def init_db(db_path: Optional[str] = None) -> None:
-    """Create all tables if they don't already exist."""
+    """Create all tables if they don't already exist.
+
+    Backward compatible with Phase 1/2 databases: ``CREATE TABLE IF NOT
+    EXISTS`` leaves the legacy games/odds/bets tables untouched and only
+    adds the Phase 3 tables (bets_log, scans). A lightweight column check
+    acts as an idempotent migration for older bets_log files.
+    """
     conn = get_connection(db_path)
     try:
         conn.executescript(_SCHEMA)
+        # Idempotent "migration": ensure Phase-3 columns exist on old DBs.
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(bets_log)")}
+        if "data_source" not in cols and "id" in cols:
+            conn.execute("ALTER TABLE bets_log ADD COLUMN data_source TEXT DEFAULT 'manual'")
         conn.commit()
     finally:
         conn.close()
