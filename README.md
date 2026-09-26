@@ -29,14 +29,20 @@ ledger. The compute layer runs **inside GitHub Actions**; the dashboard is a
 3. Add repository secrets (both optional — the scan completes without them):
    - `GROQ_API_KEY` — primary LLM for market-context insights
    - `GOOGLE_API_KEY` — Gemini Flash fallback
-4. The workflow **`.github/workflows/scan-engine.yml`** ("Stratum Market
-   Scanner") now runs automatically on `*/5 * * * *` cron. Trigger one run
-   immediately via **Actions → Stratum Market Scanner → Run workflow**
-   (manual dispatch). Each run commits fresh `data/*.json` back to `main`.
+4. The workflow **`.github/workflows/deploy.yml`** ("Deploy Pipeline
+   (Scan → Build → Pages)") is the single pipeline — it fully replaces the
+   old scanner workflow.
+   Job A runs the scanner on `*/5 * * * *` cron with **verbose logging**
+   (`STRATUM_LOG_LEVEL=DEBUG`) and **fails hard** — "Scanner produced
+   insufficient data" — if `data/latest_scan.json` comes out under 5 KB or
+   with zero matches, so empty/mock JSONs can never be committed or published.
 
 ### 2. Enable the Dashboard (frontend)
 
-Build the static site once per code change (locally or in CI):
+The pipeline builds and deploys the React app automatically — Job B runs
+`npm install && npm run build` in `frontend/` (Node 20), Job C copies the
+fresh scan JSON into `dist/data/` and publishes `frontend/dist` straight to
+Pages via `actions/upload-pages-artifact@v3`. Local rebuild (optional):
 
 ```bash
 cd frontend
@@ -44,25 +50,27 @@ npm install
 npm run build        # emits frontend/dist/
 ```
 
-Then serve it from the branch:
+> ⚠️ **REQUIRED ONE-TIME SETTING — DO NOT SKIP.** Go to
+> **Repo → Settings → Pages → Source** and select **"GitHub Actions"**.
+> It MUST be "GitHub Actions" — **NOT "Deploy from a branch"**.
+> Choosing "Deploy from a branch" makes GitHub run **Jekyll** (Ruby) over
+> the repo, which crashes on our React/Vite output (Liquid parse errors).
+> The "GitHub Actions" source disables Jekyll completely; no `_config.yml`
+> is needed anywhere. With this setting, the deploy job pushes the static
+> bundle directly — nothing else touches Pages.
 
-1. Commit `frontend/dist/` (or add a Pages build workflow — see tip below).
-2. Go to **Repo → Settings → Pages**.
-3. **Source:** *Deploy from branch* → branch `main` → folder **`/frontend/dist`** → Save.
-4. Open `https://<user>.github.io/<repo>/` — the app auto-fetches
-   `https://raw.githubusercontent.com/<owner>/<repo>/main/data/latest_scan.json`.
-   Tip: you can override the data source at runtime with `?dataBase=<url>`.
-
-*(Optional)* Replace "Commit dist" with a second workflow that runs
-`npm ci && npm run build && npx gh-pages -d frontend/dist` on pushes touching
-`frontend/**`, and stop committing `dist/` to the branch.
+The app reads its data from `./data/latest_scan.json` (relative to the page,
+so it works under any `/repo/` subpath); you can override at runtime with
+`?dataBase=<url>`.
 
 ### 3. Verify
 
-- **Actions tab**: "Stratum Market Scanner" green every 5 minutes.
-- Repo root shows bot commits `chore(scan): update market data …`.
-- Pages URL renders the dark dashboard; if the scanner hasn't run yet you'll
-  get a friendly red banner, **never a white screen**.
+- **Actions tab**: "Deploy Pipeline (Scan → Build → Pages)" goes green:
+  Job A logs "Generated X matches, Y markets, Z signals" plus byte counts,
+  Job B uploads `frontend-dist`, Job C deploys.
+- Pages URL renders the dark dashboard fed by the bundled scan; if the
+  scanner ever produces a thin board, Job A fails and Pages keeps the last
+  good deployment — **never a white screen, never an empty feed**.
 
 ## Local Development
 
@@ -78,7 +86,7 @@ cd frontend && npm install && npm run dev  # Vite dev server on :5173
 
 | Path | Role |
 |---|---|
-| `.github/workflows/scan-engine.yml` | Cron + manual dispatcher; commits validated JSON |
+| `.github/workflows/deploy.yml` | 3-job pipeline: scan (5 KB gate) → Vite build → Pages deploy (no Jekyll) |
 | `scripts/run_daily_scan.py` | GHA entry point: scan → fair odds → signals → confidence → JSON |
 | `src/quant_engine.py` | Pure math (odds conversion, de-vig, Kelly, EV, arb, CLV) |
 | `src/market_scanner.py` | Multi-book, 200-market ingestion + stale-line consensus |
