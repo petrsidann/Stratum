@@ -43,7 +43,7 @@ except ImportError:  # pragma: no cover - allows `python main.py` headless
 import pandas as pd
 import plotly.graph_objects as go
 
-from config import DATABASE_PATH, get_env
+from config import DATABASE_PATH, GOOGLE_API_KEY, GROQ_API_KEY, get_env
 from src import report, scraper, ui_theme
 from src.audit_ledger import (
     ImmutableRecordError, get_scan, ledger_metrics, list_scans, log_scan,
@@ -395,6 +395,31 @@ _SENTINEL_KEY = "sentinel"          # session_state handle (per browser session)
 _PROC_STARTED = False               # process-level guard (one thread per server)
 
 
+def secrets_status() -> dict:
+    """Which AI/push secrets are configured (never returns the values).
+
+    config.py resolves each key from st.secrets first, then os.environ — so
+    on Streamlit Cloud the Secrets manager alone is enough. Used by the
+    missing-keys banner and the SETTINGS view; tests monkeypatch this to
+    simulate both states.
+    """
+    return {
+        "groq": bool(GROQ_API_KEY),
+        "google": bool(GOOGLE_API_KEY),
+        "webhook": bool(DEFAULT_WEBHOOK),
+    }
+
+
+def missing_required_secrets(status: dict) -> list:
+    """Human-readable names of absent API keys ([] when live scanning is ready)."""
+    missing = []
+    if not status.get("groq"):
+        missing.append("GROQ_API_KEY")
+    if not status.get("google"):
+        missing.append("GOOGLE_API_KEY")
+    return missing
+
+
 def _load_settings() -> dict:
     """Settings persistence: .streamlit/settings.json keeps values across
     fresh browser sessions (session_state alone dies with the tab)."""
@@ -436,7 +461,8 @@ def ensure_app_boot() -> dict:
     """One-time per-process boot: DB schema + settings + shutdown hook.
 
     The Sentinel starts lazily (only when enabled in Settings) but ALWAYS
-    stops gracefully on interpreter exit via atexit.
+    stops gracefully on interpreter exit via atexit — the registered hook
+    joins every live daemon thread so a Cloud container never leaks watchers.
     """
     global _PROC_STARTED
     init_db()
@@ -444,7 +470,7 @@ def ensure_app_boot() -> dict:
     if "settings" not in st.session_state:
         st.session_state["settings"] = _load_settings()
     if not _PROC_STARTED:
-        atexit.register(live_watcher.stop_sentinel)
+        atexit.register(live_watcher.stop_all_sentinels)
         _PROC_STARTED = True
     return st.session_state["settings"]
 
@@ -452,23 +478,37 @@ def ensure_app_boot() -> dict:
 def sync_sentinel(settings: dict, force_restart: bool = False) -> bool:
     """Reconcile the singleton watcher with the desired Settings state.
 
+    Cloud thread-safety rules enforced here:
+      1. Check ``st.session_state`` first — if this session already holds a
+         live handle, reuse it (never re-inspect/re-spawn needlessly).
+      2. Before spawning, check the PROCESS-level singleton; if another
+         session's thread is already running, adopt it instead of starting a
+         duplicate (duplicate watchers = duplicated polls, alerts, memory).
+      3. ``start_sentinel`` itself refuses to double-spawn as a final guard.
+
     Returns True when the Sentinel thread is alive afterwards.
     """
-    current = live_watcher.get_sentinel()
+    current = st.session_state.get(_SENTINEL_KEY) or live_watcher.get_sentinel()
     desired_running = bool(settings.get("sentinel_enabled"))
     tracked = [t for t in settings.get("tracked", []) if t and t.strip()]
 
     if not desired_running:
-        if current is not None:
+        if current is not None or live_watcher.is_sentinel_alive():
             live_watcher.stop_sentinel()
-            st.session_state.pop(_SENTINEL_KEY, None)
+        st.session_state.pop(_SENTINEL_KEY, None)
         return False
 
-    if current is not None and not force_restart:
+    if current is not None and current.running and not force_restart:
         current.set_tracked(tracked)
         current.webhook_url = settings.get("webhook_url", "")
         st.session_state[_SENTINEL_KEY] = current
-        return current.running
+        return True
+
+    if live_watcher.is_sentinel_alive() and not force_restart:
+        # Another session already owns the one-per-process thread: adopt it.
+        existing = live_watcher.get_sentinel()
+        st.session_state[_SENTINEL_KEY] = existing
+        return existing.running
 
     sentinel = live_watcher.start_sentinel(
         tracked_matches=tracked,
@@ -476,9 +516,33 @@ def sync_sentinel(settings: dict, force_restart: bool = False) -> bool:
         webhook_url=settings.get("webhook_url", ""),
         db_path=DATABASE_PATH,
         interval=live_watcher.POLL_INTERVAL_SECONDS,
+        restart=force_restart,
     )
     st.session_state[_SENTINEL_KEY] = sentinel
     return sentinel.running
+
+
+# ---------------------------------------------------------------------------
+# Graceful-degradation banner (missing API keys must NEVER white-screen)
+# ---------------------------------------------------------------------------
+
+def secrets_banner_html(missing: list) -> str:
+    """Friendly HTML banner shown when live-scan AI keys are absent.
+
+    Pure function (unit-tested): the app keeps rendering in degraded mode —
+    manual entry, sample boards and the offline ledger all stay available.
+    """
+    keys = ", ".join(missing) if missing else "API keys"
+    return (
+        '<div class="stratum-banner">'
+        '<div class="stratum-banner-title">CONNECT API KEYS IN SETTINGS TO '
+        'ENABLE LIVE SCANNING</div>'
+        f'<div class="stratum-banner-body">Missing {ui_theme.esc(keys)}. '
+        "Add them under SETTINGS → SECRETS (Streamlit Cloud: app dashboard "
+        "→ Secrets). The terminal runs fully offline meanwhile — manual "
+        "entry, sample boards and the audit ledger all work without keys."
+        "</div></div>"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -633,6 +697,19 @@ def view_scan(settings: dict, sentinel_running: bool) -> None:
     if not cards:
         _empty("ZERO OPPORTUNITIES IN THIS FILTER", "Switch the filter chip or widen the scan.")
         return
+    # Seal each surfaced signal into the immutable audit ledger (Phase 5).
+    # Fire-and-forget: a ledger failure must NEVER break the SCAN view.
+    try:
+        for c in cards[:12]:
+            conf = calculate_confidence(
+                edge_pct=c.get("ev_pct"), book_agreement_count=None,
+                data_age_seconds=None, historical_win_rate=None)
+            log_scan(result["match"], c["market"], c["selection"],
+                     offered_odds=c["best_odds"], fair_odds_calc=c.get("fair_odds"),
+                     edge_pct=c.get("ev_pct"), confidence_score=conf,
+                     sport=sport, data_source="sample" if c["sample"] else "live")
+    except Exception as exc:  # noqa: BLE001 - auditing is best-effort
+        logger.warning("Ledger seal skipped: %s", exc)
     for idx, c in enumerate(cards[:12]):
         _opportunity_card(c, idx, settings)
 
@@ -791,6 +868,91 @@ def view_portfolio(settings: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
+# VIEW: AUDIT (immutable scan ledger — Phase 5 flight recorder)
+# ---------------------------------------------------------------------------
+
+def view_audit() -> None:
+    """Read-only browser over the sealed scan_history ledger.
+
+    Resolved/expired rows are protected by SQLite triggers, so nothing here
+    can mutate history — this view only renders what the engine provably
+    recorded at scan time.
+    """
+    min_conf = st.slider("MIN CONFIDENCE", 0, 95, DEFAULT_MIN_CONFIDENCE, step=5,
+                         key="audit_min_conf")
+    m = ledger_metrics()
+    k1, k2, k3, k4 = st.columns(4, gap="small")
+    with k1:
+        ui_theme.render_metric_card("Sealed Scans", str(m["total_scans"]), trend="flat",
+                                    meta=f"{m['n_resolved']} resolved · {m['n_noise']} noise")
+    with k2:
+        ui_theme.render_metric_card("Avg Confidence",
+                                    str(m["avg_confidence"]) if m["avg_confidence"] is not None else "UNKNOWN",
+                                    trend="flat", meta="0-95 scale (capped at 95)")
+    with k3:
+        clv = m["realized_clv_pct"]
+        ui_theme.render_metric_card("Realized CLV",
+                                    pct(clv) if clv is not None else "UNKNOWN",
+                                    delta=clv, meta="avg vs closing line")
+    with k4:
+        wr = m["win_rate_pct"]
+        ui_theme.render_metric_card("Settled Win Rate",
+                                    pct(wr, sign=False) if wr is not None else "UNKNOWN",
+                                    trend="flat", meta="resolved won / (won+lost)")
+
+    ui_theme.section_label("SCAN LEDGER — NEWEST FIRST")
+    rows = [r for r in list_scans(limit=200)
+            if passes_threshold(r.get("confidence_score"), min_conf)]
+    if not rows:
+        _empty("LEDGER EMPTY AT THIS THRESHOLD",
+               "Every SCAN surfaces signals here once you run one. Lower the confidence slider to see sub-threshold noise.")
+        return
+    df = pd.DataFrame([{
+        "Time": str(r.get("timestamp") or "")[:16],
+        "Match": r.get("match_ref"), "Market": r.get("market_type"),
+        "Selection": r.get("selection"), "Offered": fmt_odds(r.get("offered_odds")),
+        "Fair": fmt_odds(r.get("fair_odds_calc")), "Edge": pct(r.get("edge_pct")),
+        "Conf": r.get("confidence_score") if r.get("confidence_score") is not None else "—",
+        "Band": confidence_band(r.get("confidence_score")),
+        "Status": str(r.get("status") or "").upper(),
+        "CLV": pct(r.get("clv_pct")), "Source": r.get("data_source"),
+        "SHA-256": str(r.get("source_data_hash") or "")[:10],
+    } for r in rows])
+    st.dataframe(df, use_container_width=True, hide_index=True)
+
+    with st.expander("Resolve a pending scan against the actual close"):
+        pending = [r for r in rows if r.get("status") == "pending"]
+        if not pending:
+            st.caption("No pending records at this threshold — silence is data.")
+        else:
+            oc1, oc2, oc3 = st.columns([3, 1, 1], gap="small")
+            with oc1:
+                labels = [f"{r['timestamp'][:16]} · {r['match_ref']} · {r['market_type']} "
+                          f"{r['selection']} @ {fmt_odds(r['offered_odds'])}" for r in pending]
+                pick_idx = st.selectbox("Pending record", labels, key="audit_pick")
+            with oc2:
+                outcome = st.selectbox("Outcome", ["won", "lost", "push", "void"], key="audit_outcome")
+            with oc3:
+                close_in = st.number_input("Closing odds", value=0, step=5, key="audit_close",
+                                           help="American price at close. 0 = resolve without CLV.")
+            st.caption("Sealing is one-way: a resolved row becomes immutable (SQLite trigger).")
+            if st.button("SEAL RECORD", key="audit_seal", type="primary"):
+                rec = pending[labels.index(pick_idx)]
+                try:
+                    sealed = resolve_scan(rec["id"],
+                                          closing_odds=float(close_in) if close_in else None,
+                                          outcome=outcome)
+                    clv = sealed.get("clv_pct") if isinstance(sealed, dict) else None
+                    st.success(f"Sealed. CLV {signed(clv, suffix='%')}"
+                               if clv is not None else "Sealed (no closing line supplied).")
+                    st.rerun()
+                except ImmutableRecordError as exc:
+                    st.error(f"Record already sealed — the ledger rejects edits: {exc}")
+                except (KeyError, ValueError) as exc:
+                    st.error(str(exc))
+
+
+# ---------------------------------------------------------------------------
 # VIEW: ALERTS
 # ---------------------------------------------------------------------------
 
@@ -928,8 +1090,16 @@ def render() -> None:
 
     ui_theme.render_header("STRATUM", "QUANT EDGE TERMINAL", sentinel_running)
 
+    # Graceful degradation: missing API keys show a friendly banner instead of
+    # crashing — the app stays fully usable offline (manual entry + samples).
+    missing = missing_required_secrets(secrets_status())
+    if missing:
+        st.markdown(secrets_banner_html(missing), unsafe_allow_html=True)
+
     try:
-        if current_view == "portfolio":
+        if current_view == "audit":
+            view_audit()
+        elif current_view == "portfolio":
             view_portfolio(settings)
         elif current_view == "alerts":
             view_alerts(sentinel_running)
@@ -947,4 +1117,4 @@ def render() -> None:
 if _HAVE_STREAMLIT:
     render()
 else:  # headless fallback keeps `python main.py` working without streamlit
-    print("Stratum Ready")
+    logger.info("Stratum Ready")

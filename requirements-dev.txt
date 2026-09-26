@@ -1,0 +1,3 @@
+# Local development / CI only — NOT installed on Streamlit Cloud.
+-r requirements.txt
+pytest==9.1.1
