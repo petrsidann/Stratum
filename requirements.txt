@@ -1,14 +1,9 @@
-# Stratum — headless quant engine (GitHub Actions "Ghost Server").
-# EXACT pins only: the scheduled workflow builds this file verbatim on every
-# run; any version drift breaks reproducibility of committed data.
-# GUI stacks (streamlit, plotly) were REMOVED for the Actions+Pages migration —
-# the frontend is static React (see frontend/package.json), so the deploy
-# footprint stays minimal: network + parsing + math only.
+# Change these lines:
+numpy==1.26.4   # Last stable version for Py3.10
+pandas==2.0.3   # Compatible with numpy 1.26.x on Py3.10
+
+# Keep others as is:
 requests==2.32.4
 beautifulsoup4==4.13.4
 python-dotenv==1.1.1
-pandas==2.3.1
-numpy==2.3.1
-# Optional LLM garnish (insights degrade gracefully without keys/packages).
-groq==1.7.0
-google-genai==2.25.0
+pytest>=7.4
