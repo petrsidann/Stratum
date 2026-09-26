@@ -31,8 +31,8 @@ jobs:
       - name: Install Dependencies
         run: |
           pip install --upgrade pip
-          # Using flexible versions to avoid compilation errors on Py3.12
-          pip install numpy>=1.26,<2.0 pandas>=2.1,<2.3 requests beautifulsoup4 python-dotenv pytest
+          # CRITICAL FIX: Wrapped version specs in quotes to prevent shell redirection errors (< symbol)
+          pip install "numpy>=1.26,<2.0" "pandas>=2.1,<2.3" requests beautifulsoup4 python-dotenv pytest
 
       - name: Run Market Scanner
         env:
