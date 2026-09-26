@@ -1,9 +1,8 @@
 {
-  "schema_version": 2,
-  "generated_at": "2026-09-26T15:14:09+00:00",
+  "schema_version": 1,
+  "generated_at": "2026-09-26T15:00:32+00:00",
   "status": "degraded",
-  "data_mode": "demo",
-  "duration_seconds": 0.71,
+  "duration_seconds": 6.6,
   "summary": {
     "matches_scanned": 5,
     "matches_failed": 0,
@@ -244,607 +243,13 @@
   },
   "results": [
     {
-      "match_id": "NBA:Celtics-Knicks",
-      "sport": "NBA",
-      "home": "Celtics",
-      "away": "Knicks",
-      "scanned_at": "2026-09-26T15:14:09+00:00",
-      "data_source": "demo",
-      "quote_count": 184,
-      "opportunities": [
-        {
-          "market_type": "WIN_PROPS",
-          "selection": "Anthony Edwards",
-          "best_book": "PointsBet",
-          "offered_odds": 140,
-          "fair_odds": 103.9,
-          "fair_probability": 0.4904,
-          "edge_pct": 17.707,
-          "kelly_quarter": 0.0316,
-          "confidence": 85,
-          "band": "green",
-          "above_threshold": true
-        },
-        {
-          "market_type": "WIN_PROPS",
-          "selection": "Field",
-          "best_book": "Caesars",
-          "offered_odds": 131,
-          "fair_odds": 96.2,
-          "fair_probability": 0.5096,
-          "edge_pct": 17.707,
-          "kelly_quarter": 0.0338,
-          "confidence": 85,
-          "band": "green",
-          "above_threshold": true
-        },
-        {
-          "market_type": "WIN_PROPS",
-          "selection": "Giannis Antetokounmpo",
-          "best_book": "DraftKings",
-          "offered_odds": 162,
-          "fair_odds": 109.2,
-          "fair_probability": 0.4781,
-          "edge_pct": 25.259,
-          "kelly_quarter": 0.039,
-          "confidence": 85,
-          "band": "green",
-          "above_threshold": true
-        },
-        {
-          "market_type": "WIN_PROPS",
-          "selection": "Jayson Tatum",
-          "best_book": "FanDuel",
-          "offered_odds": 163,
-          "fair_odds": 109.6,
-          "fair_probability": 0.4771,
-          "edge_pct": 25.487,
-          "kelly_quarter": 0.0391,
-          "confidence": 85,
-          "band": "green",
-          "above_threshold": true
-        },
-        {
-          "market_type": "PARLAY_PROXY",
-          "selection": "Anthony Edwards",
-          "best_book": "DraftKings",
-          "offered_odds": 179,
-          "fair_odds": 109.0,
-          "fair_probability": 0.4785,
-          "edge_pct": 33.503,
-          "kelly_quarter": 0.0468,
-          "confidence": 75,
-          "band": "yellow",
-          "above_threshold": true
-        },
-        {
-          "market_type": "PARLAY_PROXY",
-          "selection": "Giannis Antetokounmpo",
-          "best_book": "DraftKings",
-          "offered_odds": 156,
-          "fair_odds": 91.8,
-          "fair_probability": 0.5215,
-          "edge_pct": 33.503,
-          "kelly_quarter": 0.0537,
-          "confidence": 75,
-          "band": "yellow",
-          "above_threshold": true
-        },
-        {
-          "market_type": "PARLAY_PROXY",
-          "selection": "Jayson Tatum",
-          "best_book": "BetMGM",
-          "offered_odds": 259,
-          "fair_odds": 128.7,
-          "fair_probability": 0.4373,
-          "edge_pct": 56.992,
-          "kelly_quarter": 0.055,
-          "confidence": 75,
-          "band": "yellow",
-          "above_threshold": true
-        },
-        {
-          "market_type": "PLAYER_AST",
-          "selection": "Anthony Edwards",
-          "best_book": "BetMGM",
-          "offered_odds": 159,
-          "fair_odds": 84.9,
-          "fair_probability": 0.5408,
-          "edge_pct": 40.062,
-          "kelly_quarter": 0.063,
-          "confidence": 75,
-          "band": "yellow",
-          "above_threshold": true
-        },
-        {
-          "market_type": "PLAYER_AST",
-          "selection": "Giannis Antetokounmpo",
-          "best_book": "BetMGM",
-          "offered_odds": 205,
-          "fair_odds": 117.8,
-          "fair_probability": 0.4592,
-          "edge_pct": 40.062,
-          "kelly_quarter": 0.0489,
-          "confidence": 75,
-          "band": "yellow",
-          "above_threshold": true
-        },
-        {
-          "market_type": "PLAYER_AST",
-          "selection": "Jayson Tatum",
-          "best_book": "ESPN BET",
-          "offered_odds": 215,
-          "fair_odds": 121.6,
-          "fair_probability": 0.4512,
-          "edge_pct": 42.134,
-          "kelly_quarter": 0.049,
-          "confidence": 75,
-          "band": "yellow",
-          "above_threshold": true
-        },
-        {
-          "market_type": "PLAYER_PTS",
-          "selection": "Anthony Edwards",
-          "best_book": "PointsBet",
-          "offered_odds": 165,
-          "fair_odds": 73.2,
-          "fair_probability": 0.5774,
-          "edge_pct": 52.998,
-          "kelly_quarter": 0.0803,
-          "confidence": 75,
-          "band": "yellow",
-          "above_threshold": true
-        },
-        {
-          "market_type": "PLAYER_PTS",
-          "selection": "Giannis Antetokounmpo",
-          "best_book": "BetMGM",
-          "offered_odds": 262,
-          "fair_odds": 136.6,
-          "fair_probability": 0.4226,
-          "edge_pct": 52.998,
-          "kelly_quarter": 0.0506,
-          "confidence": 75,
-          "band": "yellow",
-          "above_threshold": true
-        },
-        {
-          "market_type": "PLAYER_PTS",
-          "selection": "Jayson Tatum",
-          "best_book": "DraftKings",
-          "offered_odds": 273,
-          "fair_odds": 140.8,
-          "fair_probability": 0.4154,
-          "edge_pct": 54.929,
-          "kelly_quarter": 0.0503,
-          "confidence": 75,
-          "band": "yellow",
-          "above_threshold": true
-        },
-        {
-          "market_type": "PLAYER_REB",
-          "selection": "Anthony Edwards",
-          "best_book": "FanDuel",
-          "offered_odds": 225,
-          "fair_odds": 94.2,
-          "fair_probability": 0.5149,
-          "edge_pct": 67.351,
-          "kelly_quarter": 0.0748,
-          "confidence": 75,
-          "band": "yellow",
-          "above_threshold": true
-        },
-        {
-          "market_type": "PLAYER_REB",
-          "selection": "Giannis Antetokounmpo",
-          "best_book": "DraftKings",
-          "offered_odds": 245,
-          "fair_odds": 106.2,
-          "fair_probability": 0.4851,
-          "edge_pct": 67.351,
-          "kelly_quarter": 0.0687,
-          "confidence": 75,
-          "band": "yellow",
-          "above_threshold": true
-        },
-        {
-          "market_type": "PLAYER_REB",
-          "selection": "Jayson Tatum",
-          "best_book": "Caesars",
-          "offered_odds": 275,
-          "fair_odds": 115.4,
-          "fair_probability": 0.4643,
-          "edge_pct": 74.107,
-          "kelly_quarter": 0.0674,
-          "confidence": 75,
-          "band": "yellow",
-          "above_threshold": true
-        },
-        {
-          "market_type": "ALT_SPREAD",
-          "selection": "Celtics",
-          "best_book": "ESPN BET",
-          "offered_odds": 203,
-          "fair_odds": 93.2,
-          "fair_probability": 0.5175,
-          "edge_pct": 56.807,
-          "kelly_quarter": 0.07,
-          "confidence": 65,
-          "band": "yellow",
-          "above_threshold": true
-        },
-        {
-          "market_type": "ALT_SPREAD",
-          "selection": "Knicks",
-          "best_book": "ESPN BET",
-          "offered_odds": 225,
-          "fair_odds": 107.3,
-          "fair_probability": 0.4825,
-          "edge_pct": 56.807,
-          "kelly_quarter": 0.0631,
-          "confidence": 65,
-          "band": "yellow",
-          "above_threshold": true
-        },
-        {
-          "market_type": "ALT_TOTAL",
-          "selection": "Over",
-          "best_book": "ESPN BET",
-          "offered_odds": 216,
-          "fair_odds": 92.7,
-          "fair_probability": 0.519,
-          "edge_pct": 64.012,
-          "kelly_quarter": 0.0741,
-          "confidence": 65,
-          "band": "yellow",
-          "above_threshold": true
-        },
-        {
-          "market_type": "ALT_TOTAL",
-          "selection": "Under",
-          "best_book": "DraftKings",
-          "offered_odds": 241,
-          "fair_odds": 107.9,
-          "fair_probability": 0.481,
-          "edge_pct": 64.012,
-          "kelly_quarter": 0.0664,
-          "confidence": 65,
-          "band": "yellow",
-          "above_threshold": true
-        },
-        {
-          "market_type": "FIRST_HALF",
-          "selection": "Over",
-          "best_book": "ESPN BET",
-          "offered_odds": 180,
-          "fair_odds": 95.2,
-          "fair_probability": 0.5122,
-          "edge_pct": 43.415,
-          "kelly_quarter": 0.0603,
-          "confidence": 65,
-          "band": "yellow",
-          "above_threshold": true
-        },
-        {
-          "market_type": "FIRST_HALF",
-          "selection": "Under",
-          "best_book": "FanDuel",
-          "offered_odds": 194,
-          "fair_odds": 105.0,
-          "fair_probability": 0.4878,
-          "edge_pct": 43.415,
-          "kelly_quarter": 0.0559,
-          "confidence": 65,
-          "band": "yellow",
-          "above_threshold": true
-        },
-        {
-          "market_type": "MARGIN_BAND",
-          "selection": "Over",
-          "best_book": "Caesars",
-          "offered_odds": 216,
-          "fair_odds": 102.9,
-          "fair_probability": 0.4928,
-          "edge_pct": 55.717,
-          "kelly_quarter": 0.0645,
-          "confidence": 65,
-          "band": "yellow",
-          "above_threshold": true
-        },
-        {
-          "market_type": "MARGIN_BAND",
-          "selection": "Under",
-          "best_book": "PointsBet",
-          "offered_odds": 207,
-          "fair_odds": 97.2,
-          "fair_probability": 0.5072,
-          "edge_pct": 55.717,
-          "kelly_quarter": 0.0673,
-          "confidence": 65,
-          "band": "yellow",
-          "above_threshold": true
-        },
-        {
-          "market_type": "ML",
-          "selection": "Celtics",
-          "best_book": "BetMGM",
-          "offered_odds": -105,
-          "fair_odds": 74.2,
-          "fair_probability": 0.5739,
-          "edge_pct": 12.054,
-          "kelly_quarter": 0.0316,
-          "confidence": 65,
-          "band": "yellow",
-          "above_threshold": true
-        },
-        {
-          "market_type": "ML",
-          "selection": "Knicks",
-          "best_book": "BetMGM",
-          "offered_odds": 163,
-          "fair_odds": 134.7,
-          "fair_probability": 0.4261,
-          "edge_pct": 12.054,
-          "kelly_quarter": 0.0185,
-          "confidence": 65,
-          "band": "yellow",
-          "above_threshold": true
-        },
-        {
-          "market_type": "QUARTER_ML",
-          "selection": "Over",
-          "best_book": "BetMGM",
-          "offered_odds": 237,
-          "fair_odds": 103.4,
-          "fair_probability": 0.4917,
-          "edge_pct": 65.704,
-          "kelly_quarter": 0.0693,
-          "confidence": 65,
-          "band": "yellow",
-          "above_threshold": true
-        },
-        {
-          "market_type": "QUARTER_ML",
-          "selection": "Under",
-          "best_book": "FanDuel",
-          "offered_odds": 226,
-          "fair_odds": 96.7,
-          "fair_probability": 0.5083,
-          "edge_pct": 65.704,
-          "kelly_quarter": 0.0727,
-          "confidence": 65,
-          "band": "yellow",
-          "above_threshold": true
-        },
-        {
-          "market_type": "SPREAD",
-          "selection": "Celtics",
-          "best_book": "ESPN BET",
-          "offered_odds": 212,
-          "fair_odds": 111.8,
-          "fair_probability": 0.4721,
-          "edge_pct": 47.289,
-          "kelly_quarter": 0.0558,
-          "confidence": 65,
-          "band": "yellow",
-          "above_threshold": true
-        },
-        {
-          "market_type": "SPREAD",
-          "selection": "Knicks",
-          "best_book": "ESPN BET",
-          "offered_odds": 179,
-          "fair_odds": 89.4,
-          "fair_probability": 0.5279,
-          "edge_pct": 47.289,
-          "kelly_quarter": 0.066,
-          "confidence": 65,
-          "band": "yellow",
-          "above_threshold": true
-        },
-        {
-          "market_type": "TEAMS_1Q",
-          "selection": "Over",
-          "best_book": "Caesars",
-          "offered_odds": 214,
-          "fair_odds": 103.3,
-          "fair_probability": 0.4919,
-          "edge_pct": 54.46,
-          "kelly_quarter": 0.0636,
-          "confidence": 65,
-          "band": "yellow",
-          "above_threshold": true
-        },
-        {
-          "market_type": "TEAMS_1Q",
-          "selection": "Under",
-          "best_book": "ESPN BET",
-          "offered_odds": 204,
-          "fair_odds": 96.8,
-          "fair_probability": 0.5081,
-          "edge_pct": 54.46,
-          "kelly_quarter": 0.0667,
-          "confidence": 65,
-          "band": "yellow",
-          "above_threshold": true
-        },
-        {
-          "market_type": "TEAM_TOTAL",
-          "selection": "Over",
-          "best_book": "ESPN BET",
-          "offered_odds": 197,
-          "fair_odds": 84.9,
-          "fair_probability": 0.541,
-          "edge_pct": 60.665,
-          "kelly_quarter": 0.077,
-          "confidence": 65,
-          "band": "yellow",
-          "above_threshold": true
-        },
-        {
-          "market_type": "TEAM_TOTAL",
-          "selection": "Under",
-          "best_book": "FanDuel",
-          "offered_odds": 250,
-          "fair_odds": 117.8,
-          "fair_probability": 0.459,
-          "edge_pct": 60.665,
-          "kelly_quarter": 0.0607,
-          "confidence": 65,
-          "band": "yellow",
-          "above_threshold": true
-        },
-        {
-          "market_type": "TOTAL",
-          "selection": "Over",
-          "best_book": "FanDuel",
-          "offered_odds": 199,
-          "fair_odds": 92.0,
-          "fair_probability": 0.5208,
-          "edge_pct": 55.729,
-          "kelly_quarter": 0.07,
-          "confidence": 65,
-          "band": "yellow",
-          "above_threshold": true
-        },
-        {
-          "market_type": "TOTAL",
-          "selection": "Under",
-          "best_book": "FanDuel",
-          "offered_odds": 225,
-          "fair_odds": 108.7,
-          "fair_probability": 0.4792,
-          "edge_pct": 55.729,
-          "kelly_quarter": 0.0619,
-          "confidence": 65,
-          "band": "yellow",
-          "above_threshold": true
-        }
-      ],
-      "stale_flags": [
-        {
-          "market_type": "ALT_TOTAL",
-          "selection": "Under",
-          "bookmaker": "DraftKings",
-          "reason": "price +241 deviates 7.6% from consensus +224",
-          "kind": "price"
-        },
-        {
-          "market_type": "MARGIN_BAND",
-          "selection": "Under",
-          "bookmaker": "PointsBet",
-          "reason": "price +207 deviates 5.6% from consensus +196",
-          "kind": "price"
-        },
-        {
-          "market_type": "PARLAY_PROXY",
-          "selection": "Jayson Tatum",
-          "bookmaker": "BetMGM",
-          "reason": "price +259 deviates 37.0% from consensus +189",
-          "kind": "price"
-        },
-        {
-          "market_type": "PLAYER_AST",
-          "selection": "Jayson Tatum",
-          "bookmaker": "ESPN BET",
-          "reason": "price +215 deviates 44.3% from consensus +149",
-          "kind": "price"
-        },
-        {
-          "market_type": "PLAYER_PTS",
-          "selection": "Jayson Tatum",
-          "bookmaker": "DraftKings",
-          "reason": "price +273 deviates 20.8% from consensus +226",
-          "kind": "price"
-        },
-        {
-          "market_type": "PLAYER_REB",
-          "selection": "Jayson Tatum",
-          "bookmaker": "Caesars",
-          "reason": "price +275 deviates 34.1% from consensus +205",
-          "kind": "price"
-        },
-        {
-          "market_type": "QUARTER_ML",
-          "selection": "Over",
-          "bookmaker": "BetMGM",
-          "reason": "price +237 deviates 24.1% from consensus +191",
-          "kind": "price"
-        },
-        {
-          "market_type": "QUARTER_ML",
-          "selection": "Under",
-          "bookmaker": "FanDuel",
-          "reason": "price +226 deviates 7.1% from consensus +211",
-          "kind": "price"
-        },
-        {
-          "market_type": "SPREAD",
-          "selection": "Celtics",
-          "bookmaker": "ESPN BET",
-          "reason": "price +212 deviates 6.5% from consensus +199",
-          "kind": "price"
-        },
-        {
-          "market_type": "TEAM_TOTAL",
-          "selection": "Under",
-          "bookmaker": "FanDuel",
-          "reason": "price +250 deviates 5.0% from consensus +238",
-          "kind": "price"
-        },
-        {
-          "market_type": "WIN_PROPS",
-          "selection": "Field",
-          "bookmaker": "Caesars",
-          "reason": "price +131 deviates 6.5% from consensus +123",
-          "kind": "price"
-        },
-        {
-          "market_type": "WIN_PROPS",
-          "selection": "Giannis Antetokounmpo",
-          "bookmaker": "DraftKings",
-          "reason": "price +162 deviates 12.5% from consensus +144",
-          "kind": "price"
-        },
-        {
-          "market_type": "WIN_PROPS",
-          "selection": "Jayson Tatum",
-          "bookmaker": "FanDuel",
-          "reason": "price +163 deviates 5.2% from consensus +155",
-          "kind": "price"
-        }
-      ],
-      "arb_flags": [
-        {
-          "side_a": "Celtics",
-          "odds_a": -105,
-          "side_b": "Knicks",
-          "odds_b": 163,
-          "arb_pct": 10.758
-        }
-      ],
-      "signals": {
-        "steam": true,
-        "rlm": "NONE",
-        "arb_pct": 0.0,
-        "notes": [
-          "\ud83d\udd25 Steam: \u22653 majors moved together within 5 min",
-          "RLM needs public ticket % (not fetched \u2014 unknown, not guessed)"
-        ]
-      },
-      "top_edge_pct": 17.707,
-      "top_confidence": 85,
-      "context_used": true,
-      "insight": "Edge detected based on quantitative deviation from market mean."
-    },
-    {
-      "match_id": "NBA:Thunder-Nuggets",
-      "sport": "NBA",
-      "home": "Thunder",
-      "away": "Nuggets",
-      "scanned_at": "2026-09-26T15:14:09+00:00",
-      "data_source": "demo",
-      "quote_count": 190,
+      "match_id": "NFL:KC-BUF",
+      "sport": "NFL",
+      "home": "Chiefs",
+      "away": "Bills",
+      "scanned_at": "2026-09-26T15:00:28+00:00",
+      "data_source": "sample",
+      "quote_count": 27,
       "opportunities": [
         {
           "market_type": "WIN_PROPS",
@@ -2000,11 +1405,11 @@
     {
       "match_id": "NFL:Bills-Buccaneers",
       "sport": "NFL",
-      "home": "Bills",
-      "away": "Buccaneers",
-      "scanned_at": "2026-09-26T15:14:09+00:00",
-      "data_source": "demo",
-      "quote_count": 182,
+      "home": "Eagles",
+      "away": "Cowboys",
+      "scanned_at": "2026-09-26T15:00:29+00:00",
+      "data_source": "sample",
+      "quote_count": 27,
       "opportunities": [
         {
           "market_type": "WIN_PROPS",
@@ -2491,12 +1896,36 @@
           "kind": "price"
         },
         {
-          "market_type": "MARGIN_BAND",
-          "selection": "Over",
-          "bookmaker": "DraftKings",
-          "reason": "price +209 deviates 8.9% from consensus +192",
-          "kind": "price"
-        },
+          "market_type": "Spread",
+          "selection": "Home",
+          "bookmaker": "BetMGM",
+          "reason": "line -1.5 off consensus -3.0 by 2.0 pts",
+          "kind": "line"
+        }
+      ],
+      "arb_flags": [],
+      "signals": {
+        "steam": false,
+        "rlm": "NONE",
+        "arb_pct": 0.0,
+        "notes": [
+          "Steam needs \u22652 timestamped snapshots (none recorded yet)",
+          "RLM needs public ticket % (not fetched \u2014 unknown, not guessed)"
+        ]
+      },
+      "top_edge_pct": -4.156,
+      "top_confidence": 55,
+      "context_used": true
+    },
+    {
+      "match_id": "NBA:BOS-NYK",
+      "sport": "NBA",
+      "home": "Celtics",
+      "away": "Knicks",
+      "scanned_at": "2026-09-26T15:00:30+00:00",
+      "data_source": "sample",
+      "quote_count": 27,
+      "opportunities": [
         {
           "market_type": "MARGIN_BAND",
           "selection": "Under",
@@ -2592,13 +2021,13 @@
       "insight": "Edge detected based on quantitative deviation from market mean."
     },
     {
-      "match_id": "NFL:Chiefs-Ravens",
-      "sport": "NFL",
-      "home": "Chiefs",
-      "away": "Ravens",
-      "scanned_at": "2026-09-26T15:14:09+00:00",
-      "data_source": "demo",
-      "quote_count": 176,
+      "match_id": "NBA:LAL-GSW",
+      "sport": "NBA",
+      "home": "Lakers",
+      "away": "Warriors",
+      "scanned_at": "2026-09-26T15:00:32+00:00",
+      "data_source": "sample",
+      "quote_count": 27,
       "opportunities": [
         {
           "market_type": "WIN_PROPS",
