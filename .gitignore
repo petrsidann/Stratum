@@ -1,2 +1,2 @@
-__pycache__/
-*.pyc
+# Build artifacts
+dist/
