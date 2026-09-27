@@ -1,617 +1,315 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import OddsCard from '../components/OddsCard';
-import { Colors, Fonts, Radius, Spacing, evColor, formatPercent } from '../theme/colors';
-import { HuntResult, runHunt } from '../utils/hunterClient';
-import { TopEdge } from '../utils/apiClient';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import HunterConsole from '../components/HunterConsole';
+import ResultsDashboard from '../components/ResultsDashboard';
+import {
+  HuntLine,
+  HuntResult,
+  NetworkError,
+  fetchStatus,
+  startHunt,
+} from '../lib/swarmClient';
+import { Colors, Fonts, Radius, Spacing } from '../theme/colors';
 
 /**
- * HUNTER MODE -- interactive, query-scoped terminal.
+ * STRATUM V3.0 — HUNTER terminal screen (agent-swarm UX flow).
  *
- * State machine (the whole app lives here now; no cron feeds, no empty
- * data on load):
+ *   IDLE    -> "ENTER MATCH TO HUNT" input + sport select + [DEPLOY HUNTERS]
+ *   CONSOLE -> live Hacker-movie log stream (HunterConsole) fed by polling
+ *              data/hunt_status.json every ~1s; progress bar + stage label
+ *   RESULTS -> console fades out, ResultsDashboard slides up on terminal
+ *              status ('complete' | 'no_results' | 'error'); polling stops
  *
- *   IDLE    -> big search input + sport dropdown + cyan [ START HUNT ]
- *   LOADING -> animated progress bar cycling source status messages,
- *              button disabled
- *   RESULTS -> dashboard (top picks table + edge chart + per-edge cards)
- *              populated ONLY by the current hunt session
- *   ERROR   -> red alert "No markets detected for '[Query]'..." + retry
+ * Cleanup contract: the poll interval + AbortController are torn down on
+ * unmount and whenever we leave CONSOLE (cancel button / terminal state).
  */
 
-type Phase = 'IDLE' | 'LOADING' | 'RESULTS' | 'ERROR';
+type Phase = 'IDLE' | 'CONSOLE' | 'RESULTS';
 
 const SPORT_OPTIONS = [
   { value: 'soccer', label: 'Soccer ⚽' },
-  { value: 'basketball', label: 'Basketball 🏀' },
-  { value: 'tennis', label: 'Tennis 🎾' },
-  { value: 'auto', label: 'Auto-detect 🛰️' },
+  { value: 'nba', label: 'NBA 🏀' },
+  { value: 'nfl', label: 'NFL 🏈' },
+  { value: 'mlb', label: 'MLB ⚾' },
+  { value: 'nhl', label: 'NHL 🏒' },
 ] as const;
 
 type SportValue = (typeof SPORT_OPTIONS)[number]['value'];
 
-const STAGES = [
-  'Connecting to Betika...',
-  'Parsing Odibets...',
-  'Scanning Flashscore...',
-  'Calculating Fair Odds...',
-  'Detecting Steam...',
-];
-
-// Progress bar animation speed: stages advance on a timer purely for UX
-// pacing; the real completion signal is the hunt promise resolving.
-const STAGE_INTERVAL_MS = 1600;
+const POLL_MS = 1000; // hunt_status.json is rewritten ~1/s by the runner
+const STALL_TIMEOUT_MS = 90_000; // same watchdog budget as swarmClient.pollStatus
 
 export default function HunterScreen() {
   const [phase, setPhase] = useState<Phase>('IDLE');
-  const [query, setQuery] = useState('');
-  const [sport, setSport] = useState<SportValue>('soccer');
-  const [stageIdx, setStageIdx] = useState(0);
-  const [result, setResult] = useState<HuntResult | null>(null);
-  const [errorMsg, setErrorMsg] = useState('');
+  const [huntQuery, setHuntQuery] = useState('');
+  const [selectedSport, setSelectedSport] = useState<SportValue>('soccer');
+  const [currentLines, setCurrentLines] = useState<HuntLine[]>([]);
+  const [currentProgress, setCurrentProgress] = useState(0);
+  const [currentStage, setCurrentStage] = useState('');
+  const [finalResult, setFinalResult] = useState<HuntResult | null>(null);
+  const [deployError, setDeployError] = useState('');
+  const [slideIn, setSlideIn] = useState(false);
+
+  const pollTimerRef = useRef<number | null>(null);
   const abortRef = useRef<AbortController | null>(null);
-  const stageTimerRef = useRef<number | null>(null);
+  const phaseRef = useRef<Phase>(phase);
+  phaseRef.current = phase;
 
-  const stopStageTimer = () => {
-    if (stageTimerRef.current !== null) {
-      window.clearInterval(stageTimerRef.current);
-      stageTimerRef.current = null;
+  /* --------------------------- teardown helpers -------------------------- */
+
+  const stopPolling = useCallback(() => {
+    if (pollTimerRef.current !== null) {
+      window.clearInterval(pollTimerRef.current);
+      pollTimerRef.current = null;
     }
-  };
-
-  useEffect(() => stopStageTimer, []);
-
-  const startHunt = useCallback(async () => {
-    const trimmed = query.trim();
-    if (!trimmed || phase === 'LOADING') return;
-
-    setPhase('LOADING');
-    setStageIdx(0);
-    setResult(null);
-    setErrorMsg('');
-
-    stageTimerRef.current = window.setInterval(() => {
-      // Cycle through statuses and hold at the final stage until done.
-      setStageIdx((i) => Math.min(i + 1, STAGES.length - 1));
-    }, STAGE_INTERVAL_MS);
-
-    const controller = new AbortController();
-    abortRef.current = controller;
-
-    try {
-      const res = await runHunt(trimmed, sport, controller.signal);
-      stopStageTimer();
-      if (controller.signal.aborted) return;
-
-      const edges = res.edges ?? [];
-      if (res.status === 'success' && edges.length > 0) {
-        setResult(res);
-        setPhase('RESULTS');
-      } else {
-        // No fabricated fallbacks: zero real markets == honest error state.
-        setErrorMsg(
-          res.message ||
-            `No markets detected for '${trimmed}'. Try exact team names.`
-        );
-        setPhase('ERROR');
-      }
-    } catch (err) {
-      stopStageTimer();
-      if (controller.signal.aborted) return;
-      setErrorMsg(
-        err instanceof Error && /timeout|abort/i.test(err.message)
-          ? `Hunt timed out for '${trimmed}'. Sources may be unreachable. Retry.`
-          : `Network failure during hunt: ${
-              err instanceof Error ? err.message : 'unknown error'
-            }. Retry.`
-      );
-      setPhase('ERROR');
-    } finally {
+    if (abortRef.current) {
+      abortRef.current.abort();
       abortRef.current = null;
     }
-  }, [query, sport, phase]);
-
-  const resetToIdle = useCallback(() => {
-    abortRef.current?.abort();
-    stopStageTimer();
-    setPhase('IDLE');
-    setResult(null);
-    setErrorMsg('');
   }, []);
 
-  const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter') startHunt();
-  };
+  // Unmount safety net: clearInterval + abort().
+  useEffect(() => stopPolling, [stopPolling]);
 
-  return (
-    <div style={styles.screen}>
-      {/* Command bar is always present so you can re-hunt from any state. */}
-      <div style={styles.commandBar}>
-        <span style={styles.prompt}>{'❯'} HUNTER://</span>
+  /* ------------------------------ transitions ---------------------------- */
+
+  const resetToIdle = useCallback(() => {
+    stopPolling();
+    setPhase('IDLE');
+    setCurrentLines([]);
+    setCurrentProgress(0);
+    setCurrentStage('');
+    setFinalResult(null);
+    setDeployError('');
+    setSlideIn(false);
+  }, [stopPolling]);
+
+  const enterResults = useCallback((result: HuntResult | null) => {
+    stopPolling(); // terminal state -> stop polling immediately
+    setFinalResult(result);
+    setPhase('RESULTS');
+    // trigger CSS slide-up on next frame
+    requestAnimationFrame(() => requestAnimationFrame(() => setSlideIn(true)));
+  }, [stopPolling]);
+
+  /* -------------------------------- polling ------------------------------ */
+
+  const beginPolling = useCallback(() => {
+    stopPolling();
+    const controller = new AbortController();
+    abortRef.current = controller;
+    const startedAt = Date.now();
+    let sawLiveHunt = false;
+
+    const tick = async () => {
+      if (controller.signal.aborted || phaseRef.current !== 'CONSOLE') return;
+      try {
+        const snap = await fetchStatus(controller.signal);
+        if (controller.signal.aborted) return;
+        if (snap.status === 'running' || snap.status === 'complete' ||
+            snap.status === 'no_results' || snap.status === 'error') {
+          sawLiveHunt = true;
+        }
+        setCurrentLines(snap.lines);
+        setCurrentProgress(snap.progress);
+        setCurrentStage(snap.stage);
+
+        if (snap.status === 'complete' || snap.status === 'no_results' || snap.status === 'error') {
+          enterResults(snap.result ?? null);
+          return;
+        }
+      } catch (e) {
+        if ((e as Error)?.name === 'AbortError') return;
+        // transient network blip while the file is being rewritten -> keep alive
+      }
+      if (Date.now() - startedAt > STALL_TIMEOUT_MS && !(sawLiveHunt)) {
+        setDeployError('Hunt stalled or network unavailable.');
+        enterResults({
+          query: '', timestamp_utc: '', agents_executed: [], markets_scanned_count: 0,
+          top_edges: [], visual_reports_png: [], status: 'error',
+          error_message: 'Hunt stalled or network unavailable.',
+        } as HuntResult);
+      } else if (Date.now() - startedAt > STALL_TIMEOUT_MS) {
+        setDeployError('Swarm exceeded the 90s watchdog.');
+        enterResults(null);
+      }
+    };
+
+    void tick();
+    pollTimerRef.current = window.setInterval(() => void tick(), POLL_MS);
+  }, [enterResults, stopPolling]);
+
+  /* ------------------------------- deployment ---------------------------- */
+
+  const deploy = useCallback(async () => {
+    const trimmed = huntQuery.trim();
+    if (!trimmed || phase === 'CONSOLE') return;
+    setDeployError('');
+    setCurrentLines([]);
+    setCurrentProgress(0);
+    setCurrentStage('booting');
+    setFinalResult(null);
+    setSlideIn(false);
+    setPhase('CONSOLE');
+
+    try {
+      await startHunt(trimmed, selectedSport);
+      beginPolling();
+    } catch (e) {
+      if (e instanceof NetworkError) {
+        // Transport missing (no dev server / no CF worker configured): fall
+        // back to pure status polling — a workflow_dispatch run in flight
+        // still publishes data/hunt_status.json which we can stream.
+        beginPolling();
+      } else {
+        setDeployError(e instanceof Error ? e.message : String(e));
+        beginPolling();
+      }
+    }
+  }, [beginPolling, huntQuery, phase, selectedSport]);
+
+  const cancel = useCallback(() => {
+    stopPolling();
+    resetToIdle();
+  }, [resetToIdle, stopPolling]);
+
+  /* --------------------------------- views ------------------------------- */
+
+  if (phase === 'IDLE') {
+    return (
+      <div style={styles.idleWrap}>
+        <div style={styles.heroTitle}>ENTER MATCH TO HUNT</div>
+        <div style={styles.heroSub}>
+          The swarm deploys SCOUT → ACTUARY → CONTEXT → STRATEGIST against live market sources.
+        </div>
         <input
-          style={styles.input}
-          placeholder="Match name — e.g. Al Hilal vs Al Nassr"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          onKeyDown={onKeyDown}
-          disabled={phase === 'LOADING'}
-          spellCheck={false}
+          style={styles.huntInput}
+          placeholder="Enter match e.g. Al Hilal vs Al Nassr"
+          value={huntQuery}
+          onChange={(e) => setHuntQuery(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') void deploy(); }}
           autoFocus
         />
         <select
-          style={styles.select}
-          value={sport}
-          onChange={(e) => setSport(e.target.value as SportValue)}
-          disabled={phase === 'LOADING'}
+          style={styles.sportSelect}
+          value={selectedSport}
+          onChange={(e) => setSelectedSport(e.target.value as SportValue)}
+          aria-label="Sport selector"
         >
           {SPORT_OPTIONS.map((o) => (
-            <option key={o.value} value={o.value} style={{ background: Colors.surface }}>
-              {o.label}
-            </option>
+            <option key={o.value} value={o.value}>{o.label}</option>
           ))}
         </select>
-        <button
-          type="button"
-          style={phase === 'LOADING' ? styles.huntBtnDisabled : styles.huntBtn}
-          onClick={startHunt}
-          disabled={phase === 'LOADING' || query.trim().length === 0}
-        >
-          {phase === 'LOADING' ? 'HUNTING...' : '[ START HUNT ]'}
+        {deployError ? <div style={styles.errorText}>{deployError}</div> : null}
+        <button type="button" style={styles.deployBtn} onClick={() => void deploy()} disabled={!huntQuery.trim()}>
+          DEPLOY HUNTERS
         </button>
+        <div style={{ height: 56 }} />
+        <HunterConsole lines={[]} progress={0} stage="" isActive={false} />
       </div>
+    );
+  }
 
-      {phase === 'IDLE' && <IdleHero />}
-      {phase === 'LOADING' && <LoadingView stage={STAGES[stageIdx]} pct={stageIdx / (STAGES.length - 1)} />}
-      {phase === 'RESULTS' && result && <ResultsView result={result} onNewHunt={resetToIdle} />}
-      {phase === 'ERROR' && <ErrorView message={errorMsg} onRetry={startHunt} onEdit={resetToIdle} />}
-    </div>
-  );
-}
-
-/* ------------------------------- IDLE ---------------------------------- */
-
-function IdleHero() {
-  return (
-    <div style={styles.center}>
-      <div style={styles.heroTitle}>HUNTER MODE</div>
-      <div style={styles.heroSub}>
-        Real-time scan of ONE match across Betika · Odibets · Flashscore.
-        <br />
-        Vig removal → fair odds → edge detection. No cached data. No cron.
-      </div>
-      <div style={styles.heroHint}>Type a fixture above and hit [ START HUNT ] ⏎</div>
-    </div>
-  );
-}
-
-/* ------------------------------ LOADING --------------------------------- */
-
-function LoadingView({ stage, pct }: { stage: string; pct: number }) {
-  return (
-    <div style={styles.center}>
-      <div style={styles.loadBox}>
-        <div style={styles.loadStatus}>{stage}</div>
-        <div style={styles.track}>
-          <div
-            style={{
-              ...styles.fill,
-              width: `${Math.max(6, Math.round(pct * 100))}%`,
-            }}
-          />
+  if (phase === 'CONSOLE') {
+    return (
+      <div style={styles.consoleWrap}>
+        <div style={styles.consoleHeader}>
+          <span style={styles.consoleTarget}>
+            TARGET :: <b>{huntQuery}</b> · {selectedSport.toUpperCase()}
+          </span>
+          <button type="button" style={styles.cancelBtn} onClick={cancel}>
+            ✕ CANCEL
+          </button>
         </div>
-        <div style={styles.loadMeta}>SCANNING · TIMEOUT GUARD 10s/SOURCE · RATE LIMIT 1s/DOMAIN</div>
+        <div style={styles.consoleBackdrop}>
+          <HunterConsole lines={currentLines} progress={currentProgress} stage={currentStage} isActive />
+        </div>
+        <style>{`@keyframes stratumSpin { to { transform: rotate(360deg); } }`}</style>
+        <div style={styles.spinnerRow}>
+          <span style={styles.spinner} />
+          <span style={styles.spinnerText}>swarm airborne — holding for terminal report…</span>
+        </div>
       </div>
-    </div>
-  );
-}
+    );
+  }
 
-/* ------------------------------ RESULTS --------------------------------- */
-
-function ResultsView({ result, onNewHunt }: { result: HuntResult; onNewHunt: () => void }) {
-  const edges = useMemo(
-    () => [...(result.edges ?? [])].sort((a, b) => b.edge_percent - a.edge_percent),
-    [result]
-  );
-  const maxEdge = Math.max(...edges.map((e) => Math.abs(e.edge_percent)), 1);
-
+  /* RESULTS */
   return (
     <div style={styles.resultsWrap}>
-      <div style={styles.metaStrip}>
-        <div style={styles.metaLine}>
-          HUNT “{result.query}” · {result.sport.toUpperCase()} ·{' '}
-          {result.markets_scanned} MARKETS SCANNED · {edges.length} EDGES
-        </div>
-        <div style={styles.metaLineDim}>
-          {Object.entries(result.sources ?? {})
-            .map(([k, v]) => `${k}:${v}`)
-            .join(' | ')}{' '}
-          · {result.generated_at?.replace('T', ' ').replace('Z', '')} UTC
-        </div>
-        <button type="button" style={styles.newHuntLink} onClick={onNewHunt}>
-          ✕ NEW HUNT
-        </button>
+      <div
+        style={{
+          ...styles.slidePanel,
+          transform: slideIn ? 'translateY(0)' : 'translateY(48px)',
+          opacity: slideIn ? 1 : 0,
+        }}
+      >
+        <ResultsDashboard result={finalResult} query={huntQuery} onStartHunt={resetToIdle} />
       </div>
-
-      {/* Top-5 picks table sorted by Edge % */}
-      <div style={styles.panel}>
-        <div style={styles.panelTitle}>TOP PICKS — SORTED BY EDGE %</div>
-        <table style={styles.table}>
-          <thead>
-            <tr style={styles.thRow}>
-              <th style={{ ...styles.th, textAlign: 'left' }}>#</th>
-              <th style={{ ...styles.th, textAlign: 'left' }}>MARKET / SELECTION</th>
-              <th style={styles.th}>BEST BOOK</th>
-              <th style={styles.th}>ODDS</th>
-              <th style={styles.th}>FAIR %</th>
-              <th style={styles.th}>EDGE %</th>
-              <th style={styles.th}>KELLY</th>
-            </tr>
-          </thead>
-          <tbody>
-            {edges.map((e, i) => (
-              <tr key={`${e.market_type}-${e.selection}-${i}`} style={styles.tr}>
-                <td style={{ ...styles.td, textAlign: 'left', color: Colors.textMuted }}>{i + 1}</td>
-                <td style={{ ...styles.td, textAlign: 'left' }}>
-                  <span style={styles.tdMarket}>{e.market_name}</span>{' '}
-                  <span style={styles.tdSel}>{e.selection}</span>
-                </td>
-                <td style={styles.td}>{e.best_bookmaker}</td>
-                <td style={styles.td}>{e.best_price.toFixed(2)}</td>
-                <td style={styles.td}>{formatPercent(e.fair_probability, 1)}</td>
-                <td style={{ ...styles.td, color: evColor(e.edge_percent), fontWeight: 700 }}>
-                  {e.edge_percent >= 0 ? '+' : ''}
-                  {formatPercent(e.edge_percent, 2)}
-                </td>
-                <td style={styles.td}>{formatPercent(e.kelly_stake * 100, 2)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-
-      {/* Edge bar chart (pure CSS, no chart lib needed for N<=5) */}
-      <div style={styles.panel}>
-        <div style={styles.panelTitle}>EDGE DISTRIBUTION</div>
-        {edges.map((e, i) => (
-          <div key={`bar-${i}`} style={styles.barRow}>
-            <div style={styles.barLabel}>
-              {e.selection.slice(0, 14)} <span style={styles.barLabelDim}>· {e.market_type}</span>
-            </div>
-            <div style={styles.barTrack}>
-              <div
-                style={{
-                  ...styles.barFill,
-                  width: `${(Math.abs(e.edge_percent) / maxEdge) * 100}%`,
-                  backgroundColor: evColor(e.edge_percent),
-                }}
-              />
-            </div>
-            <div style={{ ...styles.barVal, color: evColor(e.edge_percent) }}>
-              {e.edge_percent >= 0 ? '+' : ''}
-              {formatPercent(e.edge_percent, 2)}
-            </div>
-          </div>
-        ))}
-      </div>
-
-      {/* Full cards (reuse existing component contract) */}
-      <div style={styles.panel}>
-        <div style={styles.panelTitle}>SIGNAL DETAIL</div>
-        {edges.map((e, i) => (
-          <OddsCard key={`card-${i}`} edge={toTopEdge(e)} />
-        ))}
-      </div>
+      <button type="button" style={styles.backBtn} onClick={resetToIdle}>
+        ← BACK TO SEARCH
+      </button>
     </div>
   );
 }
 
-function toTopEdge(e: HuntResult['edges'][number]): TopEdge {
-  return {
-    match_id: e.match_id,
-    sport: e.sport,
-    icon: e.icon,
-    home_team: e.home_team,
-    away_team: e.away_team,
-    commence: e.commence,
-    market_type: e.market_type,
-    market_name: e.market_name,
-    line: e.line,
-    selection: e.selection,
-    best_bookmaker: e.best_bookmaker,
-    best_price: e.best_price,
-    fair_probability: e.fair_probability,
-    raw_probability: e.raw_probability,
-    ev_percent: e.edge_percent,
-    kelly_stake: e.kelly_stake,
-    confidence: e.confidence,
-    signals: e.signals ?? [],
-  };
-}
-
-/* ------------------------------- ERROR ---------------------------------- */
-
-function ErrorView({ message, onRetry, onEdit }: { message: string; onRetry: () => void; onEdit: () => void }) {
-  return (
-    <div style={styles.center}>
-      <div style={styles.alertBox}>
-        <div style={styles.alertTitle}>⛔ NO MARKETS DETECTED</div>
-        <p style={styles.alertBody}>{message}</p>
-        <div style={styles.alertActions}>
-          <button type="button" style={styles.retryBtn} onClick={onRetry}>
-            ↻ RETRY HUNT
-          </button>
-          <button type="button" style={styles.editBtn} onClick={onEdit}>
-            EDIT QUERY
-          </button>
-        </div>
-        <div style={styles.alertFootnote}>
-          The engine never fabricates odds — an empty scan means the sources
-          genuinely returned nothing for this query.
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/* ------------------------------- STYLES --------------------------------- */
+/* --------------------------------- styles -------------------------------- */
 
 const styles: Record<string, React.CSSProperties> = {
-  screen: {
-    flex: 1,
-    display: 'flex',
-    flexDirection: 'column',
-    backgroundColor: Colors.background,
-    minHeight: '100vh',
-  },
-  commandBar: {
-    display: 'flex',
-    gap: Spacing.sm,
-    alignItems: 'center',
-    padding: Spacing.lg,
-    borderBottom: `1px solid ${Colors.border}`,
-    backgroundColor: Colors.surface,
-    flexWrap: 'wrap',
-  },
-  prompt: { color: Colors.primary, fontFamily: Fonts.mono, fontSize: 14, fontWeight: 700 },
-  input: {
-    flex: '1 1 260px',
-    minWidth: 220,
-    backgroundColor: Colors.background,
-    border: `1px solid ${Colors.border}`,
-    borderRadius: Radius.md,
-    color: Colors.textPrimary,
-    fontFamily: Fonts.mono,
-    fontSize: 15,
-    padding: '14px 16px',
-    outline: 'none',
-  },
-  select: {
-    backgroundColor: Colors.background,
-    border: `1px solid ${Colors.border}`,
-    borderRadius: Radius.md,
-    color: Colors.textPrimary,
-    fontFamily: Fonts.mono,
-    fontSize: 12,
-    padding: '13px 10px',
-    cursor: 'pointer',
-  },
-  huntBtn: {
-    backgroundColor: Colors.primary,
-    color: '#04141A',
-    border: 'none',
-    borderRadius: Radius.md,
-    fontFamily: Fonts.mono,
-    fontSize: 13,
-    fontWeight: 800,
-    letterSpacing: 1,
-    padding: '14px 22px',
-    cursor: 'pointer',
-    boxShadow: `0 0 18px ${Colors.primary}55`,
-  },
-  huntBtnDisabled: {
-    backgroundColor: Colors.border,
-    color: Colors.textMuted,
-    border: 'none',
-    borderRadius: Radius.md,
-    fontFamily: Fonts.mono,
-    fontSize: 13,
-    fontWeight: 800,
-    letterSpacing: 1,
-    padding: '14px 22px',
-    cursor: 'not-allowed',
-  },
-  center: {
-    flex: 1,
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: Spacing.xl,
+  idleWrap: {
+    display: 'flex', flexDirection: 'column', alignItems: 'center',
+    gap: Spacing.lg, padding: `${Spacing.xl}px ${Spacing.lg}px`, maxWidth: 860, margin: '0 auto', width: '100%',
   },
   heroTitle: {
-    color: Colors.primary,
-    fontFamily: Fonts.mono,
-    fontSize: 34,
-    fontWeight: 900,
-    letterSpacing: 6,
-    textShadow: `0 0 24px ${Colors.primary}66`,
+    color: Colors.textPrimary, fontSize: 30, fontWeight: 900, letterSpacing: 3, textAlign: 'center',
   },
-  heroSub: {
-    marginTop: Spacing.md,
-    color: Colors.textSecondary,
-    fontFamily: Fonts.ui,
-    fontSize: 13,
-    lineHeight: 1.7,
-    textAlign: 'center',
+  heroSub: { color: Colors.textSecondary, fontSize: 13, textAlign: 'center', marginTop: -Spacing.sm },
+  huntInput: {
+    width: '100%', boxSizing: 'border-box', backgroundColor: '#0A0D14', color: Colors.textPrimary,
+    border: `1px solid ${Colors.border}`, borderRadius: Radius.md, padding: '18px 20px',
+    fontSize: 18, fontFamily: Fonts.ui, outline: 'none',
   },
-  heroHint: {
-    marginTop: Spacing.xl,
-    color: Colors.textMuted,
-    fontFamily: Fonts.mono,
-    fontSize: 11,
-    letterSpacing: 1,
+  sportSelect: {
+    backgroundColor: Colors.surfaceAlt, color: Colors.textPrimary, border: `1px solid ${Colors.border}`,
+    borderRadius: Radius.sm, padding: '10px 14px', fontSize: 14, fontFamily: Fonts.mono, minWidth: 200,
   },
-  loadBox: { width: '100%', maxWidth: 460 },
-  loadStatus: {
-    color: Colors.primary,
-    fontFamily: Fonts.mono,
-    fontSize: 14,
-    letterSpacing: 1,
-    marginBottom: Spacing.md,
+  errorText: { color: Colors.danger, fontSize: 12.5, fontFamily: Fonts.mono, textAlign: 'center' },
+  deployBtn: {
+    backgroundColor: '#00E5FF', color: '#000', border: 'none', borderRadius: 9999,
+    padding: '12px 32px', fontWeight: 800, letterSpacing: 2, textTransform: 'uppercase',
+    fontSize: 14, cursor: 'pointer', boxShadow: '0 8px 28px rgba(0,229,255,0.35)',
+    transition: 'all 200ms ease',
   },
-  track: {
-    height: 8,
-    backgroundColor: Colors.surfaceAlt,
-    border: `1px solid ${Colors.border}`,
-    borderRadius: 999,
-    overflow: 'hidden',
+  consoleWrap: {
+    position: 'relative', padding: Spacing.lg, maxWidth: 980, margin: '0 auto', width: '100%',
+    boxSizing: 'border-box',
   },
-  fill: {
-    height: '100%',
-    background: `linear-gradient(90deg, ${Colors.primary}, ${Colors.success})`,
-    transition: 'width 1.4s ease',
-    borderRadius: 999,
+  consoleHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: Spacing.md },
+  consoleTarget: { color: Colors.textSecondary, fontFamily: Fonts.mono, fontSize: 12.5, letterSpacing: 0.5 },
+  cancelBtn: {
+    backgroundColor: 'transparent', color: Colors.danger, border: `1px solid ${Colors.danger}`,
+    borderRadius: Radius.sm, padding: '6px 14px', fontSize: 12, fontWeight: 700,
+    letterSpacing: 1, cursor: 'pointer', fontFamily: Fonts.mono,
   },
-  loadMeta: {
-    marginTop: Spacing.md,
-    color: Colors.textMuted,
-    fontFamily: Fonts.mono,
-    fontSize: 10,
-    letterSpacing: 1,
+  consoleBackdrop: {
+    backdropFilter: 'blur(6px)', WebkitBackdropFilter: 'blur(6px)',
+    backgroundColor: 'rgba(15,17,26,0.55)', borderRadius: 14, padding: 2,
   },
+  spinnerRow: { display: 'flex', alignItems: 'center', gap: Spacing.sm, marginTop: Spacing.md },
+  spinner: {
+    width: 14, height: 14, borderRadius: '50%', border: `2px solid ${Colors.border}`,
+    borderTopColor: Colors.primary, animation: 'stratumSpin 0.9s linear infinite', display: 'inline-block',
+  },
+  spinnerText: { color: Colors.textMuted, fontSize: 12, fontFamily: Fonts.mono, fontStyle: 'italic' },
   resultsWrap: {
-    flex: 1,
-    width: '100%',
-    maxWidth: 760,
-    margin: '0 auto',
-    padding: `0 ${Spacing.lg}px ${Spacing.xl}px`,
+    padding: `${Spacing.lg}px ${Spacing.lg}px 96px`, maxWidth: 980, margin: '0 auto', width: '100%',
+    boxSizing: 'border-box',
   },
-  metaStrip: { position: 'relative', padding: `${Spacing.md}px 0` },
-  metaLine: { color: Colors.textSecondary, fontFamily: Fonts.mono, fontSize: 11, letterSpacing: 0.5 },
-  metaLineDim: { color: Colors.textMuted, fontFamily: Fonts.mono, fontSize: 10, marginTop: 4 },
-  newHuntLink: {
-    position: 'absolute',
-    right: 0,
-    top: Spacing.md,
-    background: 'none',
-    border: `1px solid ${Colors.border}`,
-    borderRadius: Radius.sm,
-    color: Colors.danger,
-    fontFamily: Fonts.mono,
-    fontSize: 10,
-    fontWeight: 700,
-    padding: '4px 8px',
-    cursor: 'pointer',
+  slidePanel: {
+    transition: 'transform 450ms cubic-bezier(0.22, 1, 0.36, 1), opacity 450ms ease',
   },
-  panel: {
-    backgroundColor: Colors.surface,
-    border: `1px solid ${Colors.border}`,
-    borderRadius: Radius.md,
-    padding: Spacing.lg,
-    marginTop: Spacing.md,
-  },
-  panelTitle: {
-    color: Colors.primary,
-    fontFamily: Fonts.mono,
-    fontSize: 11,
-    fontWeight: 700,
-    letterSpacing: 2,
-    marginBottom: Spacing.md,
-  },
-  table: { width: '100%', borderCollapse: 'collapse' },
-  thRow: { borderBottom: `1px solid ${Colors.border}` },
-  th: {
-    color: Colors.textMuted,
-    fontFamily: Fonts.mono,
-    fontSize: 9,
-    letterSpacing: 1,
-    textAlign: 'right' as const,
-    padding: '6px 8px',
-    fontWeight: 600,
-  },
-  tr: { borderBottom: `1px solid ${Colors.gridLine}` },
-  td: {
-    color: Colors.textPrimary,
-    fontFamily: Fonts.mono,
-    fontSize: 11,
-    textAlign: 'right' as const,
-    padding: '8px',
-  },
-  tdMarket: { color: Colors.textSecondary },
-  tdSel: { color: Colors.textPrimary, fontWeight: 700 },
-  barRow: {
-    display: 'grid',
-    gridTemplateColumns: '130px 1fr 70px',
-    gap: Spacing.sm,
-    alignItems: 'center',
-    marginBottom: Spacing.sm,
-  },
-  barLabel: { color: Colors.textPrimary, fontFamily: Fonts.mono, fontSize: 10 },
-  barLabelDim: { color: Colors.textMuted },
-  barTrack: {
-    height: 10,
-    backgroundColor: Colors.surfaceAlt,
-    borderRadius: 999,
-    overflow: 'hidden',
-  },
-  barFill: { height: '100%', borderRadius: 999, transition: 'width 0.6s ease' },
-  barVal: { fontFamily: Fonts.mono, fontSize: 10, textAlign: 'right' as const, fontWeight: 700 },
-  alertBox: {
-    width: '100%',
-    maxWidth: 520,
-    backgroundColor: '#2A1418',
-    border: `1px solid ${Colors.danger}`,
-    borderRadius: Radius.md,
-    padding: Spacing.xl,
-    textAlign: 'center',
-    boxShadow: `0 0 30px ${Colors.danger}33`,
-  },
-  alertTitle: {
-    color: Colors.danger,
-    fontFamily: Fonts.mono,
-    fontSize: 16,
-    fontWeight: 900,
-    letterSpacing: 2,
-  },
-  alertBody: {
-    color: Colors.textPrimary,
-    fontFamily: Fonts.ui,
-    fontSize: 13,
-    lineHeight: 1.6,
-    marginTop: Spacing.md,
-  },
-  alertActions: {
-    display: 'flex',
-    gap: Spacing.sm,
-    justifyContent: 'center',
-    marginTop: Spacing.lg,
-  },
-  retryBtn: {
-    backgroundColor: Colors.danger,
-    color: '#1A0407',
-    border: 'none',
-    borderRadius: Radius.sm,
-    fontFamily: Fonts.mono,
-    fontSize: 12,
-    fontWeight: 800,
-    padding: '10px 18px',
-    cursor: 'pointer',
-  },
-  editBtn: {
-    backgroundColor: 'transparent',
-    color: Colors.textSecondary,
-    border: `1px solid ${Colors.border}`,
-    borderRadius: Radius.sm,
-    fontFamily: Fonts.mono,
-    fontSize: 12,
-    fontWeight: 700,
-    padding: '10px 18px',
-    cursor: 'pointer',
-  },
-  alertFootnote: {
-    marginTop: Spacing.lg,
-    color: Colors.textMuted,
-    fontFamily: Fonts.ui,
-    fontSize: 10,
-    lineHeight: 1.5,
+  backBtn: {
+    position: 'fixed', bottom: 18, left: '50%', transform: 'translateX(-50%)',
+    backgroundColor: Colors.surface, color: Colors.primary, border: `1px solid ${Colors.primary}`,
+    borderRadius: 9999, padding: '10px 26px', fontWeight: 800, letterSpacing: 1.5,
+    cursor: 'pointer', fontFamily: Fonts.mono, fontSize: 12.5, zIndex: 20,
   },
 };

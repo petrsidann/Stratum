@@ -1,0 +1,190 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://stratum.app/schemas/hunt_result.schema.json",
+  "title": "Stratum V3.0 Hunt Result",
+  "description": "Data contract emitted by scripts/swarm_runner.py (agent swarm) at the end of a hunt. Written to data/hunts/latest.json and data/hunts/{timestamp}/hunt_result.json. Integrity rule: every number in top_edges derives from a real scraped price; an empty top_edges array with status 'no_results' is a VALID, honest outcome — fabricated odds are a contract violation.",
+  "type": "object",
+  "required": [
+    "query",
+    "timestamp_utc",
+    "agents_executed",
+    "markets_scanned_count",
+    "top_edges",
+    "visual_reports_png",
+    "status"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "description": "Contract version, e.g. '3.0.0'"
+    },
+    "query": {
+      "type": "string",
+      "description": "The user's original match query, verbatim",
+      "minLength": 1
+    },
+    "sport": {
+      "type": "string",
+      "enum": ["auto", "soccer", "basketball", "tennis"]
+    },
+    "timestamp_utc": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$",
+      "description": "ISO-8601 UTC completion timestamp"
+    },
+    "agents_executed": {
+      "type": "array",
+      "description": "Agents that were deployed during this hunt",
+      "items": {
+        "type": "string",
+        "enum": ["scout", "actuary", "context", "strategist"]
+      },
+      "uniqueItems": true
+    },
+    "agents_failed": {
+      "type": "array",
+      "description": "Agents that crashed or timed out (report degrades to math-only; confidence penalized)",
+      "items": {
+        "type": "string",
+        "enum": ["scout", "actuary", "context", "strategist"]
+      },
+      "uniqueItems": true,
+      "default": []
+    },
+    "markets_scanned_count": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Number of market handles that passed no-vig validation"
+    },
+    "raw_prices_seen": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Total individual price rows harvested across all sources"
+    },
+    "sources": {
+      "type": "object",
+      "description": "Per-source scrape status: ok | empty | blocked | error | timeout | no_fixture | skipped",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "context_available": {
+      "type": "boolean",
+      "description": "True when the LLM context agent contributed real notes"
+    },
+    "mode": {
+      "type": "string",
+      "enum": ["full", "math_only"],
+      "description": "math_only = context agent unavailable/failed; confidences carry a penalty"
+    },
+    "top_edges": {
+      "type": "array",
+      "maxItems": 50,
+      "description": "Ranked bets sorted by EV% x Confidence (descending). Empty array when no verified edge exists — NEVER padded with invented prices.",
+      "items": { "$ref": "#/definitions/topEdge" }
+    },
+    "visual_reports_png": {
+      "type": "array",
+      "description": "Repo-relative paths of Matplotlib PNGs generated during THIS run (heatmap / radar / line-movement). Empty if charts could not be built from real data.",
+      "items": {
+        "type": "string",
+        "pattern": "^data/reports/[A-Za-z0-9_.-]+\\.png$"
+      },
+      "uniqueItems": true
+    },
+    "data_policy": {
+      "type": "string",
+      "description": "Integrity attestation echoed by the runner"
+    },
+    "status": {
+      "type": "string",
+      "enum": ["success", "no_results", "error"],
+      "description": "success >= 1 ranked edge; no_results = honest empty scan; error = swarm failure"
+    },
+    "error_message": {
+      "type": "string",
+      "description": "Required human-readable explanation whenever status != 'success'"
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "status": { "const": "success" } } },
+      "then": { "properties": { "top_edges": { "minItems": 1 } } }
+    },
+    {
+      "if": { "properties": { "status": { "enum": ["no_results", "error"] } } },
+      "then": { "required": ["error_message"] }
+    }
+  ],
+  "definitions": {
+    "topEdge": {
+      "type": "object",
+      "required": [
+        "market",
+        "selection",
+        "book_odds",
+        "fair_odds",
+        "ev_percent",
+        "confidence_score",
+        "kelly_stake_pct",
+        "reasoning_summary"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "market": {
+          "type": "string",
+          "description": "Market display incl. line, e.g. 'Asian Handicap -1.5'",
+          "minLength": 1
+        },
+        "selection": {
+          "type": "string",
+          "description": "Picked leg, e.g. 'Home', 'Under 3.5'",
+          "minLength": 1
+        },
+        "book_odds": {
+          "type": "number",
+          "exclusiveMinimum": 1.0,
+          "maximum": 1000,
+          "description": "Best REAL quoted decimal price found across books"
+        },
+        "fair_odds": {
+          "type": ["number", "null"],
+          "description": "No-vig fair decimal price (null when handle too thin to de-vig)"
+        },
+        "ev_percent": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Expected value % per unit staked vs fair probability"
+        },
+        "confidence_score": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100,
+          "description": "0-100 blend of edge size, book count, movement, liquidity; penalized in math_only mode"
+        },
+        "kelly_stake_pct": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Quarter-Kelly stake as % of bankroll"
+        },
+        "reasoning_summary": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Why this edge exists (signals + context notes), one-liner"
+        },
+        "best_bookmaker": {
+          "type": "string",
+          "description": "Which book quotes book_odds"
+        },
+        "signals": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["STALE_LINE_ARB", "STALE_LINE", "LINE_MOVE", "VALUE"]
+          }
+        }
+      }
+    }
+  }
+}

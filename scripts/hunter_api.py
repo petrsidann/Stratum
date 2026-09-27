@@ -523,9 +523,25 @@ def _to_decimal(price: float) -> float:
 # Parallel hunt orchestration with per-source hard deadlines
 # ---------------------------------------------------------------------------
 
-def run_hunt(query: str, sport: str = "auto") -> Dict[str, Any]:
+def run_hunt(query: str, sport: str = "auto",
+             on_source_done=None) -> Dict[str, Any]:
+    """Execute one query-scoped hunt.
+
+    `on_source_done(name, row_count, status)` is an optional live callback
+    invoked from worker threads as each source finishes — used by the V3.0
+    agent swarm to stream SCOUT progress to the console UI. It must be
+    thread-safe and never raise; failures are swallowed.
+    """
     tokens = normalize_query(query)
     log(f"hunting '{query}' -> tokens {tokens} (sport={sport})")
+
+    def _notify(name: str, n: int, status: str) -> None:
+        if on_source_done is None:
+            return
+        try:
+            on_source_done(name, n, status)
+        except Exception:
+            pass
 
     jobs = {
         "betika": lambda: scrape_betika(tokens),
@@ -553,6 +569,7 @@ def run_hunt(query: str, sport: str = "auto") -> Dict[str, Any]:
         statuses[name] = status
         raw_rows.extend(rows)
         log(f"{name}: {len(rows)} raw price rows [{status}]")
+        _notify(name, len(rows), status)
 
     # Quant engine: vig removal, fair odds, EV, Kelly, confidence, signals.
     state: Dict[str, Any] = {"odds_history": {}, "last_run": None}
@@ -577,6 +594,9 @@ def run_hunt(query: str, sport: str = "auto") -> Dict[str, Any]:
         "markets_scanned": len(markets),
         "picks": top,
         "edges": edges,
+        # "_raw_rows" is an internal hand-off consumed by the V3.0 agent swarm
+        # (Actuary re-runs the quant engine on it, Scout pops it before emit).
+        "_raw_rows": raw_rows,
         "data_policy": "real scraped prices only; empty result means no data, "
                        "never fabricated odds",
     }
@@ -652,6 +672,7 @@ def serve(port: int) -> None:
                 return
             try:
                 payload = run_hunt(query, sport)
+                payload.pop("_raw_rows", None)
                 code = 200
             except Exception as exc:  # never hang the UI, report honestly
                 payload = {"status": "error", "query": query, "sport": sport,
@@ -695,6 +716,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         ap.error("--query is required (or use: serve)")
 
     payload = run_hunt(args.query, args.sport)
+    payload.pop("_raw_rows", None)
     text = json.dumps(payload, indent=2)
     if args.output:
         with open(args.output, "w", encoding="utf-8") as fh:
