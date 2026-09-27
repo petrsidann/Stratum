@@ -26,6 +26,14 @@ jobs:
         with:
           node-version: '20'
 
+      # NEW SAFETY CHECK: Verify app structure exists
+      - name: Validate App Structure
+        working-directory: ./app
+        run: |
+          if [ ! -f package.json ]; then echo "ERROR: app/package.json missing"; exit 1; fi
+          if ! grep -q '"build"' package.json; then echo "ERROR: No 'build' script defined"; exit 1; fi
+          echo "✅ App structure validated."
+
       - name: Install Frontend Dependencies
         working-directory: ./app
         run: npm install --prefer-offline --no-audit --fund=false
