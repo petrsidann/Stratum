@@ -1,0 +1,130 @@
+name: Stratum PWA Pipeline
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+jobs:
+  run-engine:
+    name: Run Quant Engine
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install engine dependencies
+        run: pip install --quiet requests beautifulsoup4
+
+      - name: Execute market scan
+        env:
+          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+          STRATUM_BUDGET_S: '600'
+        run: python scripts/engine.py
+
+      - name: Upload feed artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-market-feed
+          path: data/live_market_feed.json
+
+      - name: Upload engine state artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: engine-state
+          path: data/.engine_state.json
+          if-no-files-found: ignore
+
+  commit-data:
+    name: Commit Live Feed
+    needs: run-engine
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: live-market-feed
+          path: data
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: engine-state
+          path: data
+        continue-on-error: true
+
+      - name: Push updated feed (race-proof)
+        run: |
+          git config user.name "stratum-engine[bot]"
+          git config user.email "engine@stratum.local"
+          git add data/live_market_feed.json || true
+          git add data/.engine_state.json || true
+          if git diff --cached --quiet; then
+            echo "No feed changes to commit."
+            exit 0
+          fi
+          for attempt in 1 2 3 4 5; do
+            git commit -m "engine: update live market feed ($(date -u +%Y-%m-%dT%H:%M:%SZ))"
+            git pull --rebase origin main && git push origin HEAD:main && exit 0
+            echo "Push race detected, retrying ($attempt)..."
+            sleep $((attempt * 3))
+          done
+          echo "Failed to push feed after retries." && exit 1
+
+  build-deploy-pwa:
+    name: Build & Deploy PWA
+    needs: commit-data
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install app dependencies
+        working-directory: app
+        run: npm install --no-audit --no-fund
+
+      - name: Bundle live data into public folder
+        run: |
+          mkdir -p app/public/data
+          cp data/live_market_feed.json app/public/data/latest_scan.json
+
+      - name: Build static site
+        working-directory: app
+        env:
+          CI: 'true'
+        run: npm run build
+
+      - uses: actions/configure-pages@v4
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: ./app/dist
+
+      - id: deployment
+        uses: actions/deploy-pages@v4
