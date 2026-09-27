@@ -57,8 +57,8 @@ import sys
 import threading
 import time
 import unicodedata
-from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import quote_plus, urlparse
 
@@ -148,8 +148,14 @@ class FetchError(Exception):
 # ONLY `Accept: application/json` (or no extra headers at all) get 200.
 # Verified live during the Austria-vs-Kosovo diagnostic: same URL, same IP,
 # same second: browser headers -> 403, minimal JSON headers -> 200.
+#
+# UNIVERSE-SCAN REFINEMENT (Lithuania-vs-Azerbaijan diagnostic): a Chrome
+# User-Agent is ALSO rejected by Akamai on site.api.espn.com when paired
+# with this client's TLS fingerprint (UA alone -> 403; UA dropped -> 200,
+# verified same-second from this host). So ESPN requests must send the bare
+# minimum: Accept: application/json, nothing else. Bookmaker HTML sources
+# keep their browser-style headers in http_get()'s default path.
 JSON_HEADERS = {
-    "User-Agent": USER_AGENTS[0],
     "Accept": "application/json",
 }
 
@@ -553,6 +559,79 @@ def espn_soccer_leagues() -> List[str]:
                     "uefa.champions", "uefa.europa", "ksa.1"]
     _espn_leagues_cache = ordered[:28]
     return _espn_leagues_cache
+
+
+def espn_slate_boards(days_ahead: int = 1) -> List[Tuple[Dict[str, Any], str]]:
+    """Fetch today+tomorrow scoreboards for every configured league and
+    return [(league_dict, event), ...] for all upcoming fixtures.
+
+    This is the fixture-slate builder behind `swarm_runner.py scan-slate`:
+    the scheduled swarm scans the broad slate once per cycle, computes edges
+    for everything it finds, and publishes data/market_universe.json which
+    the PWA filters client-side. No per-hunt network round-trip needed.
+
+    League metadata comes from ESPN's own core endpoint when reachable;
+    otherwise we synthesize minimal dicts from the league keys (display name
+    = key). Failures are logged with typed status, never silently swallowed.
+    """
+    today = datetime.now(timezone.utc)
+    # ESPN's scoreboard `dates` param accepts a SINGLE YYYYMMDD per request;
+    # ranges ("YYYYMMDDYYYYMMDD", hyphen, comma) all answer HTTP 400 (verified
+    # live). So the d1+d2 slate is the union of two per-day fetches.
+    date_days = [(today + timedelta(days=i)).strftime("%Y%m%d")
+                 for i in range(days_ahead + 1)]
+    # Resolve display names via the core sports endpoint (best effort).
+    name_by_key: Dict[str, str] = {}
+    resp = _espn_get(_ESPN_BASE)
+    if resp is not None:
+        try:
+            for lg in resp.json().get("leagues", []):
+                if lg.get("key"):
+                    name_by_key[lg["key"]] = lg.get("name") or lg["key"]
+        except Exception:
+            pass
+
+    def _board_for(key: str) -> List[Tuple[Dict[str, Any], str]]:
+        out: List[Tuple[Dict[str, Any], str]] = []
+        seen_ids: set = set()
+        for ds in date_days:
+            url = f"{_ESPN_BASE}/{key}/scoreboard?limit=100&dates={ds}"
+            try:
+                r = http_get(url, headers=JSON_HEADERS, strict=True)
+            except FetchError as fe:
+                log(f"slate {key} @{ds}: [{fe.kind.upper()}]")
+                continue
+            if r is None:
+                continue
+            try:
+                events = r.json().get("events", [])
+            except Exception:
+                log(f"slate {key} @{ds}: malformed json [ERROR]")
+                continue
+            for ev in events:
+                eid = ev.get("id")
+                if eid in seen_ids:
+                    continue
+                seen_ids.add(eid)
+                out.append((ev, ds))
+        lg = {"sport": "soccer", "league": key,
+              "display": name_by_key.get(key, key), "key": key}
+        return [(lg, ev) for ev, _ in out]
+
+    boards: List[Tuple[Dict[str, Any], str]] = []
+    keys = espn_soccer_leagues()
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        futures = {pool.submit(_board_for, k): k for k in keys}
+        for fut in as_completed(futures):
+            k = futures[fut]
+            try:
+                got = fut.result()
+            except Exception:
+                log(f"slate {k}: crashed [ERROR]")
+                continue
+            boards.extend(got)
+            log(f"slate {k}: {len(got)} events in d1+d2 window")
+    return boards
 
 
 def scrape_espn_mirror(tokens: List[str], sport: str) -> Tuple[List[Dict[str, Any]], str]:

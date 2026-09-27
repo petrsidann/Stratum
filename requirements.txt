@@ -1,0 +1,15 @@
+# Stratum V3.0 — Python runtime deps (3.12-safe, unpinned floors only).
+# Used by actions/setup-python's cache hash + as install documentation;
+# .github/workflows/deploy-swarm.yml installs these explicitly.
+numpy>=1.26
+pandas>=2.1.4
+requests>=2.31
+beautifulsoup4>=4.12
+python-dotenv>=1.0
+aiohttp>=3.9
+matplotlib>=3.8
+groq>=0.11
+google-genai>=1.0
+pydantic>=2.7
+jsonschema>=4.22
+pytest>=8.0

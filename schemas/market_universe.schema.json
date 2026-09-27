@@ -1,0 +1,100 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://stratum.app/schemas/market_universe.schema.json",
+  "title": "Stratum V3.0 Market Universe",
+  "description": "Scheduled-scan aggregate published by `python scripts/swarm_runner.py scan-slate` to data/market_universe.json. The PWA loads this file ONCE and filters client-side by the user's typed match — there is no per-hunt network trigger. Integrity rule (same as hunt_result): every number derives from a real scraped price; fixtures with zero verified edges legitimately carry an empty top_edges array.",
+  "type": "object",
+  "required": [
+    "generated_at_utc",
+    "next_refresh_estimate_utc",
+    "sources_status",
+    "fixture_count",
+    "fixtures"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "schema_version": { "type": "string" },
+    "generated_at_utc": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$"
+    },
+    "next_refresh_estimate_utc": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$"
+    },
+    "sources_status": {
+      "type": "object",
+      "description": "Per-source telemetry for THIS cycle. Values are 'ok(N)' or one of the typed failure labels — a blocked source is NEVER reported as empty.",
+      "additionalProperties": {
+        "type": "string",
+        "pattern": "^(ok\\(\\d+\\)|blocked_by_waf|timeout_on_load|no_fixture_in_board|deferred|error)$"
+      }
+    },
+    "fixture_count": { "type": "integer", "minimum": 0 },
+    "fixtures": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/fixture" }
+    }
+  },
+  "definitions": {
+    "edge": {
+      "type": "object",
+      "required": [
+        "market", "selection", "book_odds", "ev_percent",
+        "confidence_score", "kelly_stake_pct", "reasoning_summary"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "market": { "type": "string", "minLength": 1 },
+        "selection": { "type": "string", "minLength": 1 },
+        "book_odds": { "type": "number", "exclusiveMinimum": 1.0 },
+        "fair_odds": { "type": ["number", "null"], "exclusiveMinimum": 1.0 },
+        "ev_percent": { "type": "number" },
+        "confidence_score": { "type": "number", "minimum": 0, "maximum": 100 },
+        "kelly_stake_pct": { "type": "number", "minimum": 0, "maximum": 25 },
+        "reasoning_summary": { "type": "string" }
+      }
+    },
+    "trace_line": {
+      "type": "object",
+      "required": ["agent", "text", "ts"],
+      "additionalProperties": false,
+      "properties": {
+        "agent": {
+          "type": "string",
+          "enum": ["SCOUT", "ACTUARY", "CONTEXT", "STRATEGIST", "SWARM"]
+        },
+        "text": { "type": "string" },
+        "ts": { "type": "number", "minimum": 0 }
+      }
+    },
+    "fixture": {
+      "type": "object",
+      "required": [
+        "fixture_id", "home", "away", "sport", "league",
+        "kickoff_utc", "markets_scanned", "top_edges", "agent_trace_lines"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "fixture_id": { "type": "string", "minLength": 1 },
+        "home": { "type": "string", "minLength": 1 },
+        "away": { "type": "string", "minLength": 1 },
+        "sport": {
+          "type": "string",
+          "enum": ["soccer", "nba", "nfl", "mlb", "nhl"]
+        },
+        "league": { "type": "string" },
+        "kickoff_utc": { "type": "string" },
+        "markets_scanned": { "type": "integer", "minimum": 0 },
+        "top_edges": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/edge" }
+        },
+        "agent_trace_lines": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/trace_line" }
+        }
+      }
+    }
+  }
+}
