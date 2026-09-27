@@ -1,6 +1,1 @@
-# Dependencies
-node_modules/
-
-# Build artifacts and caches
-dist/
-build/
+__pycache__/
