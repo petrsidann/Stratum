@@ -1,22 +1,18 @@
 name: Stratum Swarm Deploy
 
-# STRATUM V3.0 SCHEDULED-SWARM architecture (pivot from on-demand hunts):
-#   scan-universe    -> `swarm_runner.py scan-slate` scans today+tomorrow
-#                       boards across all configured ESPN leagues (plus any
-#                       discovered JSON book sources), runs the 4-agent math
-#                       pipeline per fixture, and publishes ONE aggregate:
-#                       data/market_universe.json (+ replayable hunt_status.json)
-#   commit-results   -> race-proof push of data/ back to main
-#   build-deploy-pwa -> rebuild + deploy Pages on top of fresh universe data
-# The PWA loads market_universe.json once and filters CLIENT-SIDE — there is
-# no browser->workflow trigger anywhere in the user flow.
-
 on:
-  schedule:
-    # Universe rescan every 15 minutes (client caches one static file).
-    - cron: '*/15 * * * *'
-  workflow_dispatch: {}   # manual force-rescan; NO inputs (schedule/push runs
-                          # supply empty inputs and must not crash)
+  workflow_dispatch:
+    inputs:
+      match_query:
+        description: 'Match to hunt (e.g., Al Hilal vs Al Nassr)'
+        required: true
+        type: string
+      sport:
+        description: 'Sport Category'
+        required: true
+        type: choice
+        options: [soccer, nba, nfl, mlb, nhl]
+        default: soccer
   push:
     paths:
       - 'scripts/**'
@@ -35,10 +31,6 @@ concurrency:
 jobs:
   scan-universe:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-    env:
-      # Optional LLM context for agent_context (neutral fallback if absent).
-      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -46,130 +38,88 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.12'   # NO cache line: repo-root requirements.txt
-                                   # exists as the cache anchor, but we install
-                                   # --no-cache-dir anyway; removing the hash
-                                   # key kills the "No file matched
-                                   # **/requirements.txt" hard failure.
+          python-version: '3.12'
+          # CACHE REMOVED TO PREVENT MISSING FILE ERROR
 
       - name: Install Dependencies
         run: |
-          python -m pip install --no-cache-dir --upgrade pip
-          pip install --no-cache-dir \
-            aiohttp matplotlib numpy pandas requests beautifulsoup4 \
-            python-dotenv groq google-genai pydantic jsonschema
+          pip install --upgrade pip
+          pip install aiohttp matplotlib numpy pandas requests beautifulsoup4 python-dotenv groq google-genai pydantic jsonschema
 
-      - name: Scan fixture slate (scheduled swarm cycle)
-        # Input-FREE by design: schedule/push triggers supply empty inputs.
-        # scan-slate builds today+tomorrow boards across the expanded ESPN
-        # league set, runs scout->actuary->context->strategist math per
-        # fixture, validates + publishes data/market_universe.json and a
-        # replayable data/hunt_status.json. Exit 0 = universe published &
-        # schema-valid; exit 2 = valid run whose slate is honestly empty.
-        run: |-
-          python scripts/swarm_runner.py scan-slate
-          rc=$?
-          if [ "$rc" -eq 0 ]; then exit 0; fi
-          if [ "$rc" -eq 2 ]; then
-            echo "::notice::Scan completed with an empty slate (honest zero-fixture outcome)."
-            exit 0
+      - name: Execute Hunter Swarm
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+        run: |
+          echo "Deploying Hunters for: ${{ inputs.match_query }}"
+          python scripts/swarm_runner.py --query "${{ inputs.match_query }}" --sport "${{ inputs.sport }}"
+          
+          # Verify output exists before uploading artifact
+          if [ ! -f data/hunts/latest.json ]; then
+            echo "ERROR: swarm produced no result file."
+            exit 1
           fi
-          exit "$rc"
+          echo "Swarm complete. Result size: $(stat -c%s data/hunts/latest.json) bytes"
 
-      - name: Upload universe artifact
+      - name: Upload Hunt Output Artifact
         uses: actions/upload-artifact@v4
         with:
           name: hunt-output
-          path: |
-            data/market_universe.json
-            data/hunt_status.json
-            data/hunts/latest.json
-            data/hunts/*/
-          if-no-files-found: error
+          path: data/hunts/
           retention-days: 7
 
   commit-results:
-    needs: [scan-universe]
+    needs: run-swarm
     runs-on: ubuntu-latest
-    timeout-minutes: 5
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Download universe output
+      - name: Download Hunt Output
         uses: actions/download-artifact@v4
         with:
           name: hunt-output
           path: .
 
-      - name: Commit & push results (race-proof reset-to-origin pattern)
+      - name: Commit Results to Repo
         run: |
-          git config user.name "stratum-swarm-bot"
-          git config user.email "stratum-swarm-bot@users.noreply.github.com"
-          mkdir -p data
-          ls -la data/market_universe.json data/hunt_status.json || true
-          git add data/market_universe.json data/hunt_status.json data/hunts/ schemas/ || true
-          if git diff --staged --quiet; then
-            echo "No new universe data to commit."
-            exit 0
-          fi
-          git commit -m "chore: universe scan $(date -u +%FT%TZ)"
-          for attempt in 1 2 3; do
-            if git push origin HEAD:main; then exit 0; fi
-            echo "push rejected (attempt $attempt) — rebasing onto origin/main"
-            git fetch --no-tags origin main
-            git reset --soft "$(git rev-parse origin/main)" 2>/dev/null || true
-            git pull --rebase origin main || true
-            git add data/market_universe.json data/hunt_status.json data/hunts/ || true
-            git diff --staged --quiet && { echo "nothing left to push"; exit 0; }
-            git commit -m "chore: universe scan $(date -u +%FT%TZ)" || true
-          done
-          echo "failed to push after retries" >&2; exit 1
+          git config user.name "Stratum Bot"
+          git config user.email "bot@stratum.ai"
+          git add data/hunts/
+          # Only commit if there are actual changes
+          git diff --staged --quiet || git commit -m "swarm: ${{ inputs.match_query }} @ $(date -u +%FT%TZ)"
+          git push origin main
 
   build-deploy-pwa:
-    needs: [commit-results]
+    needs: commit-results
     runs-on: ubuntu-latest
-    timeout-minutes: 15
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - name: Checkout Repository (with committed universe)
+      - name: Checkout Latest Code
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ github.sha }} # Ensure we grab the freshly committed results
 
-      - name: Setup Node
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
-          cache: npm
-          cache-dependency-path: app/package-lock.json
+          node-version: '20'
 
-      - name: Bundle live universe into site payload
-        # The PWA fetches ./data/market_universe.json from the deployed site
-        # first (same-origin, always fresh with the deploy), falling back to
-        # raw.githubusercontent.com. Baking it in removes cold-start races.
+      - name: Build Frontend
+        working-directory: ./app
         run: |
-          mkdir -p app/public/data
-          cp -f data/market_universe.json app/public/data/market_universe.json
-          cp -f data/hunt_status.json app/public/data/hunt_status.json
-          rm -rf app/public/data/hunts
-          cp -r data/hunts app/public/data/hunts || true
-
-      - name: Build PWA
-        working-directory: app
-        run: |
-          npm ci
+          npm ci --prefer-offline --no-audit --fund=false
           npm run build
 
-      - name: Configure Pages
+      - name: Configure GitHub Pages
         uses: actions/configure-pages@v4
 
-      - name: Upload Pages artifact
+      - name: Upload Pages Artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: ./app/dist
+          path: './app/dist'
 
       - name: Deploy to GitHub Pages
         id: deployment
