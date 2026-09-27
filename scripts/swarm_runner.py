@@ -203,7 +203,10 @@ async def agent_scout(ctx: SwarmContext) -> Dict[str, Any]:
         ctx.log("scout", f"Connecting to {name} ...")
 
     def on_source_done(name: str, rows: int, status: str) -> None:
-        # called from scraper worker threads -> marshal onto the log bus
+        # called from scraper worker threads -> marshal onto the log bus.
+        # Statuses are typed by hunter_api (blocked_waf / timeout /
+        # spa_shell_deferred_to_pw / no_fixture / fixture_no_odds / ok) so
+        # "site blocked us" is NEVER displayed as a generic empty.
         icon = "OK" if status == "ok" else status.upper()
         ctx.log("scout", f"{name}: {rows} price rows [{icon}]")
 
@@ -476,8 +479,27 @@ def _build_report(ctx: SwarmContext, scout: Dict[str, Any],
         "status": "success" if top else "no_results",
     }
     if not top:
+        # Honest, diagnostic empty result: name the failure mode per source
+        # so operators can tell "site blocked us" from "no match listed".
+        _diag = {
+            "blocked_waf": "BLOCKED_BY_WAF (site refused our IP/headers)",
+            "spa_shell_deferred_to_pw": "DEFERRED_TO_PLAYWRIGHT_PHASE_B "
+                                        "(JS-rendered board, no static odds)",
+            "timeout": "TIMEOUT_ON_LOAD",
+            "not_found": "NOT_FOUND (stale route)",
+            "fixture_no_odds": "fixture located but bookmaker lines absent/"
+                               "expired on that feed",
+            "no_fixture": "match not listed on any scanned board",
+            "empty": "board reachable, nothing matched the query",
+            "error": "scraper error",
+            "skipped": "skipped (sport mismatch)",
+        }
+        srcs = scout.get("sources", {})
+        parts = [f"{k}={_diag.get(v, v)}" for k, v in srcs.items()] or \
+                ["no sources reported"]
         report["error_message"] = (
-            f"No tradable edge found for '{ctx.query}'. "
+            f"No tradable edge found for '{ctx.query}'. Source telemetry: "
+            + "; ".join(parts) + ". "
             f"{report['markets_scanned_count']} markets scanned, "
             f"{len([m for m in markets])} valid handles, 0 positive EV after "
             "vig removal. This is an honest empty result, not a bug.")
