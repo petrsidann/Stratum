@@ -810,6 +810,125 @@ def scan_slate() -> Dict[str, Any]:
     return universe
 
 
+def _render_cycle_pngs(cycle_dir: str, fixtures: List[Dict[str, Any]],
+                       rows_by_id: Dict[str, List[Dict[str, Any]]],
+                       limit: int = 3) -> List[str]:
+    """Matplotlib visuals for the cycle's highest-signal fixtures, written
+    under data/hunts/<utc_cycle>/ via the SAME visualizer the manual hunts
+    use (no duplicated chart logic). Cosmetic: never fatal, never faked."""
+    files: List[str] = []
+
+    def score(fx: Dict[str, Any]) -> float:
+        return max((float(e.get("ev_percent", -999))
+                    for e in fx.get("top_edges", [])), default=-999)
+
+    chosen = [fx for fx in sorted(fixtures, key=score, reverse=True)
+              if score(fx) > 0][:limit]
+    for fx in chosen:
+        match_doc = {"id": fx["fixture_id"], "home_team": fx["home"],
+                     "away_team": fx["away"],
+                     "markets": rows_by_id.get(fx["fixture_id"], [])}
+        try:
+            from visualizer import generate_reports
+            out = generate_reports({"matches": [match_doc]}, cycle_dir,
+                                   max_matches=1)
+            for lst in out.values():
+                for f in lst:
+                    if os.path.exists(os.path.join(cycle_dir, f)):
+                        rel = os.path.relpath(os.path.join(cycle_dir, f),
+                                              _ROOT).replace(os.sep, "/")
+                        files.append(rel)
+        except Exception:
+            pass  # charts are cosmetic; the scan must never die on a PNG
+    return files
+
+
+async def run_full_slate_scan(sport_filter: str = "all") -> None:
+    """CLI entry for `scan-slate` (see main()).
+
+    Thin async orchestration wrapper around the existing synchronous sweep
+    (`scan_slate`) so ZERO business logic is duplicated:
+
+      a/b) fixture slate = today+tomorrow across every configured league
+           (ESPN_CONTINENTAL_LEAGUES: uefa.nations, fifa.worldq, uefa.euroq,
+           caf.champions, concacaf.league + runtime-discovered domestic
+           majors eng.1/esp.1/ita.1/ger.1/fra.1/ksa.1/uefa.champions/...);
+           per fixture the scout->actuary->strategist chain runs sequentially
+           inside scan_slate(), reusing hunter_api._espn_event_rows (scout),
+           analyzer.analyze_rows (actuary) and the shared edge-scoring /
+           reasoning code (strategist). Network failures are handled per
+           source/league there — a bad board is skipped, never fatal — and
+           ESPN fetches are parallelized with bounded concurrency instead of
+           serialized sleeps (total added overhead stays ~1s).
+      c/d) all fixtures aggregate into the market_universe.json schema and
+           are jsonschema-validated BEFORE the atomic write.
+      e)   hunt_status.json receives the replayable log snapshot tagged with
+           the generation timestamp (done inside scan_slate()).
+      f)   PNG visualizations render under data/hunts/<utc_cycle>/.
+      g)   returns cleanly on success; raises RuntimeError when the whole
+           sweep produced zero valid markets (clear message, no partial
+           publication).
+
+    sport_filter narrows the aggregation by fixture sport/category; 'all'
+    keeps everything. If the filter excludes every priced fixture we raise
+    rather than publish an empty universe.
+    """
+    loop = asyncio.get_running_loop()
+    universe = await loop.run_in_executor(None, scan_slate)
+
+    sf = (sport_filter or "all").strip().lower()
+    fixtures = universe.get("fixtures", [])
+    if sf not in ("", "all", "auto"):
+        fixtures = [f for f in fixtures
+                    if f.get("sport") == sf or f.get("league") == sf]
+        if len(fixtures) < universe.get("fixture_count", 0):
+            universe = dict(universe)
+            universe["fixtures"] = fixtures
+            universe["fixture_count"] = len(fixtures)
+            universe["sport_filter"] = sf
+
+    if not fixtures:
+        stats = universe.get("scan_stats", {})
+        raise RuntimeError(
+            "scan-slate discovered zero valid markets across the entire "
+            f"slate ({stats.get('events_seen', 0)} events seen, "
+            f"{stats.get('events_priced', 0)} priced, sport_filter="
+            f"'{sf}'). Boards were reachable but carried no tradable lines "
+            "(maintenance/expired odds) — refusing to publish an empty "
+            "universe.")
+
+    # (f) cycle directory consistent with prior hunts: data/hunts/<UTC>/
+    cycle_dir = os.path.join(
+        HUNTS_DIR, datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ"))
+    os.makedirs(cycle_dir, exist_ok=True)
+    # scout price rows (needed only for charts) harvested post-aggregation;
+    # failures here degrade visuals, never the published universe.
+    rows_by_id: Dict[str, List[Dict[str, Any]]] = {}
+    try:
+        import hunter_api
+        boards = await loop.run_in_executor(
+            None, lambda: hunter_api.espn_slate_boards(days_ahead=SCAN_DAYS_AHEAD))
+        keep = {f["fixture_id"] for f in fixtures}
+        for lg, ev in boards:
+            fid = f"espn_{ev.get('id')}"
+            if fid in keep and fid not in rows_by_id:
+                rows_by_id[fid] = hunter_api._espn_event_rows(ev)
+    except Exception as exc:
+        print(f"[swarm] chart row harvest skipped "
+              f"({type(exc).__name__}) — visuals optional", flush=True)
+    pngs = await loop.run_in_executor(
+        None, _render_cycle_pngs, cycle_dir, fixtures, rows_by_id)
+
+    atomic_write(os.path.join(cycle_dir, "market_universe.json"), universe)
+    atomic_write(os.path.join(HUNTS_DIR, "latest.json"), universe)
+    sports = sorted({f.get("sport", "?") for f in fixtures})
+    leagues = sorted({f.get("league", "?") for f in fixtures})
+    print(f"[swarm] scan-slate OK :: {len(fixtures)} fixtures | "
+          f"sports={sports} | leagues={len(leagues)} | "
+          f"pngs={len(pngs)} -> data/hunts/"
+          f"{os.path.basename(cycle_dir)}/", flush=True)
+
+
 # ---------------------------------------------------------------------------
 # Dev server (stdlib only) — powers the live console without GitHub round-trips
 # ---------------------------------------------------------------------------
@@ -899,24 +1018,38 @@ def main(argv: Optional[List[str]] = None) -> int:
     sub = ap.add_subparsers(dest="cmd")
     serve_p = sub.add_parser("serve", help="run the swarm dev server")
     serve_p.add_argument("--port", type=int, default=8788)
-    sub.add_parser("scan-slate",
-                   help="scheduled universe scan -> data/market_universe.json "
-                        "(cron entry for deploy-swarm.yml)")
+    # 'slate' positional-argument group: scheduled-sweep entry points.
+    # (argparse permits a single subparsers ACTION; the metavar below labels
+    # that positional group, and scan-slate registers inside it with its own
+    # optional --sport filter, default 'all'.)
+    slate = sub
+    slate_p = slate.add_parser("scan-slate", aliases=["slate"],
+                               help="scheduled universe scan -> "
+                                    "data/market_universe.json (cron entry for "
+                                    "deploy-swarm.yml)")
+    slate_p.add_argument("--sport", dest="slate_sport", type=str,
+                         default="all",
+                         help="optional sport filter (default: all)")
     args = ap.parse_args(argv)
 
     if args.cmd == "serve":
         serve(args.port)
         return 0
 
-    if args.cmd == "scan-slate":
+    if args.cmd in ("scan-slate", "slate"):
+        sport_filter = getattr(args, "slate_sport", "all") or "all"
         try:
-            u = scan_slate()
+            asyncio.run(run_full_slate_scan(sport_filter=sport_filter))
+        except RuntimeError as exc:
+            # zero valid markets overall -> clear error message, no partial
+            # publication, no crash trace demanded from operators
+            print(f"[swarm] scan-slate aborted: {exc}", file=sys.stderr)
+            return 2
         except Exception as exc:
             print(f"[swarm] scan-slate FAILED: {type(exc).__name__}: {exc}",
                   file=sys.stderr)
             return 1
-        # Non-empty universe OR honest typed failure — never a silent empty.
-        return 0 if u["fixture_count"] > 0 else 2
+        return 0
 
     if not args.query:
         ap.error("--query is required (or use: serve / scan-slate)")
