@@ -1,18 +1,17 @@
-import axios from 'axios';
 
+// Primary source: raw GitHub feed committed by the engine every 15 minutes.
 export const FEED_URL =
   'https://raw.githubusercontent.com/petersidann/Stratum/main/data/live_market_feed.json';
+
+// Bundled fallback: copy of the latest scan baked into the static site at
+// build time (CI copies data/live_market_feed.json to public/data/latest_scan.json).
+export const BUNDLED_FEED_URL = './data/latest_scan.json';
 
 export interface BookmakerPrice {
   bookmaker: string;
   price: number;
   decimal: number;
   implied_probability: number;
-}
-
-export interface MarketMovementPoint {
-  0: string;
-  1: number;
 }
 
 export interface Market {
@@ -77,6 +76,7 @@ export interface FeedMeta {
   generated_at: string;
   next_refresh_minutes?: number;
   data_policy?: string;
+  sources_attempted?: string[];
   sources_active?: string[];
   matches_scanned: number;
   markets_scanned: number;
@@ -108,37 +108,62 @@ const EMPTY_FEED: MarketFeed = {
 let cache: { feed: MarketFeed; fetchedAt: number } | null = null;
 const CACHE_TTL_MS = 5 * 60 * 1000;
 
+function isWellFormed(feed: unknown): feed is MarketFeed {
+  const f = feed as MarketFeed;
+  return !!f && typeof f === 'object' && Array.isArray(f.matches);
+}
+
+async function tryFetch(url: string): Promise<MarketFeed | null> {
+  try {
+    // Use the Fetch API (not XHR) so no CORS preflight is triggered; raw
+    // GitHub serves simple GETs with Access-Control-Allow-Origin: *.
+    const response = await fetch(url, {
+      method: 'GET',
+      cache: 'no-store',
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!response.ok) return null;
+    const data = (await response.json()) as MarketFeed;
+    if (isWellFormed(data)) return data;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Downloads live_market_feed.json from the repository raw URL.
- * On any failure returns an empty feed with error metadata so the UI
- * renders "No Signal" states instead of stale or fabricated data.
+ * Falls back to the bundled latest_scan.json snapshot baked into the PWA at
+ * build time (flagged so the UI labels freshness honestly).
+ * On total failure returns an empty feed with error metadata so every screen
+ * renders "No Signal" states instead of fabricated rows.
  */
 export async function fetchMarketFeed(force = false): Promise<MarketFeed> {
   const now = Date.now();
   if (!force && cache && now - cache.fetchedAt < CACHE_TTL_MS) {
     return cache.feed;
   }
-  try {
-    const response = await axios.get<MarketFeed>(FEED_URL, {
-      timeout: 15000,
-      headers: { 'Cache-Control': 'no-cache' },
-    });
-    const feed = response.data;
-    if (!feed || !Array.isArray(feed.matches)) {
-      throw new Error('malformed feed payload');
-    }
-    cache = { feed, fetchedAt: now };
-    return feed;
-  } catch (err) {
-    // Serve last known good structure but flag freshness honestly.
-    if (cache) {
-      return {
-        ...cache.feed,
-        meta: { ...cache.feed.meta, error: 'stale_cache' },
-      };
-    }
-    return EMPTY_FEED;
+
+  const live = await tryFetch(FEED_URL);
+  if (live) {
+    cache = { feed: live, fetchedAt: now };
+    return live;
   }
+
+  if (cache) {
+    return { ...cache.feed, meta: { ...cache.feed.meta, error: 'stale_cache' } };
+  }
+
+  const bundled = await tryFetch(BUNDLED_FEED_URL);
+  if (bundled) {
+    cache = { feed: bundled, fetchedAt: now };
+    return {
+      ...bundled,
+      meta: { ...bundled.meta, error: 'bundled_snapshot' },
+    };
+  }
+
+  return EMPTY_FEED;
 }
 
 export function findMatch(feed: MarketFeed, matchId: string): Match | undefined {

@@ -1,10 +1,6 @@
-# Python
-__pycache__/
-*.pyc
-
-# Node/Expo Dependencies
+# Dependencies
 node_modules/
 
-# Logs and Temp Files
-*.log
-*.tmp
+# Build artifacts and caches
+dist/
+build/

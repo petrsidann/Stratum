@@ -1,3 +1,6 @@
+// Stratum V2.0 design system tokens (web port of the native theme).
+// Strict palette: dark base, neon cyan primary, green success, red danger.
+
 export const Colors = {
   background: '#0F111A',
   surface: '#1E2330',
@@ -15,23 +18,12 @@ export const Colors = {
 };
 
 export const Fonts = {
-  ui: 'Inter',
-  mono: 'JetBrainsMono',
+  ui: "'Inter', system-ui, -apple-system, sans-serif",
+  mono: "'JetBrains Mono', 'SFMono-Regular', Menlo, monospace",
 };
 
-export const Spacing = {
-  xs: 4,
-  sm: 8,
-  md: 12,
-  lg: 16,
-  xl: 24,
-};
-
-export const Radius = {
-  sm: 6,
-  md: 10,
-  lg: 16,
-};
+export const Radius = { sm: 6, md: 10, lg: 16 };
+export const Spacing = { xs: 4, sm: 8, md: 12, lg: 16, xl: 24 };
 
 export function evColor(evPercent: number): string {
   if (evPercent >= 3) return Colors.success;
