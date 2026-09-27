@@ -1,33 +1,17 @@
 name: Stratum Swarm Deploy
 
-# STRATUM V3.0 agent-swarm pipeline:
-#   run-swarm        -> scripts/swarm_runner.py (SCOUT/ACTUARY/CONTEXT/STRATEGIST)
-#   commit-results   -> publish data/hunts/{timestamp}/ + hunt_status.json to main
-#                       (the PWA polls raw.githubusercontent.com for these)
-#   build-deploy-pwa -> rebuild + deploy the GitHub Pages frontend on top of
-#                       the freshly committed hunt data.
-#
-# Trigger manually with a match query, or automatically whenever swarm code
-# changes (push filter below) so main always carries a recent live status file.
-
 on:
   workflow_dispatch:
     inputs:
       match_query:
-        description: 'Match to hunt (exact team names work best)'
+        description: 'Match to hunt (e.g., Al Hilal vs Al Nassr)'
         required: true
         type: string
-        default: 'Al Hilal vs Al Nassr'
       sport:
-        description: 'Sport'
+        description: 'Sport Category'
         required: true
         type: choice
-        options:
-          - soccer
-          - nba
-          - nfl
-          - mlb
-          - nhl
+        options: [soccer, nba, nfl, mlb, nhl]
         default: soccer
   push:
     paths:
@@ -47,10 +31,6 @@ concurrency:
 jobs:
   run-swarm:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
-    env:
-      # Optional LLM context for agent_context (neutral fallback if absent).
-      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -59,114 +39,87 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-          cache: pip
+          # CACHE REMOVED TO PREVENT MISSING FILE ERROR
 
       - name: Install Dependencies
         run: |
-          python -m pip install --no-cache-dir --upgrade pip
-          pip install --no-cache-dir \
-            aiohttp matplotlib numpy pandas requests beautifulsoup4 \
-            python-dotenv groq google-genai pydantic jsonschema playwright
+          pip install --upgrade pip
+          pip install aiohttp matplotlib numpy pandas requests beautifulsoup4 python-dotenv groq google-genai pydantic jsonschema
 
-      - name: Run Agent Swarm Hunt
-        # Push-triggered runs have no workflow inputs; fall back to a probe
-        # fixture so the pipeline smoke-tests without fabricating picks
-        # (empty results are a valid, honest outcome per data policy).
+      - name: Execute Hunter Swarm
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
         run: |
-          QUERY="${{ inputs.match_query }}"
-          SPORT="${{ inputs.sport }}"
-          if [ -z "$QUERY" ] || [ "$QUERY" = "" ]; then QUERY="Arsenal vs Chelsea"; fi
-          if [ -z "$SPORT" ]; then SPORT="soccer"; fi
-          python scripts/swarm_runner.py --query "$QUERY" --sport "$SPORT"
+          echo "Deploying Hunters for: ${{ inputs.match_query }}"
+          python scripts/swarm_runner.py --query "${{ inputs.match_query }}" --sport "${{ inputs.sport }}"
+          
+          # Verify output exists before uploading artifact
+          if [ ! -f data/hunts/latest.json ]; then
+            echo "ERROR: swarm produced no result file."
+            exit 1
+          fi
+          echo "Swarm complete. Result size: $(stat -c%s data/hunts/latest.json) bytes"
 
-      - name: Upload hunt output artifact
+      - name: Upload Hunt Output Artifact
         uses: actions/upload-artifact@v4
         with:
           name: hunt-output
-          path: |
-            data/hunts/latest.json
-            data/hunt_status.json
-            data/hunts/*/
-          if-no-files-found: error
+          path: data/hunts/
           retention-days: 7
 
   commit-results:
-    needs: [run-swarm]
+    needs: run-swarm
     runs-on: ubuntu-latest
-    timeout-minutes: 5
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Download hunt output
+      - name: Download Hunt Output
         uses: actions/download-artifact@v4
         with:
           name: hunt-output
           path: data/hunts/
 
-      - name: Normalize layout (status file lives at data/hunt_status.json)
+      - name: Commit Results to Repo
         run: |
-          if [ -f data/hunts/data/hunt_status.json ]; then
-            mv data/hunts/data/hunt_status.json data/hunt_status.json
-            rm -rf data/hunts/data
-          elif [ -f data/hunt_status.json ]; then
-            :
-          fi
-          ls -R data/hunts | head -40
-
-      - name: Commit & push results
-        run: |
-          git config user.name "stratum-swarm-bot"
-          git config user.email "stratum-swarm-bot@users.noreply.github.com"
-          git add data/hunts/ data/hunt_status.json schemas/ || true
-          if git diff --staged --quiet; then
-            echo "No new hunt data to commit."
-          else
-            git commit -m "swarm: ${{ inputs.match_query }} $(date -u +%FT%TZ)"
-            git push origin main
-          fi
+          git config user.name "Stratum Bot"
+          git config user.email "bot@stratum.ai"
+          git add data/hunts/
+          # Only commit if there are actual changes
+          git diff --staged --quiet || git commit -m "swarm: ${{ inputs.match_query }} @ $(date -u +%FT%TZ)"
+          git push origin main
 
   build-deploy-pwa:
-    needs: [commit-results]
+    needs: commit-results
     runs-on: ubuntu-latest
-    timeout-minutes: 15
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - name: Checkout Repository (with committed hunt results)
+      - name: Checkout Latest Code
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ github.sha }} # Ensure we grab the freshly committed results
 
-      - name: Setup Node
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
-          cache: npm
-          cache-dependency-path: app/package-lock.json
+          node-version: '20'
 
-      - name: Build PWA
-        working-directory: app
+      - name: Build Frontend
+        working-directory: ./app
         run: |
-          npm ci
+          npm ci --prefer-offline --no-audit --fund=false
           npm run build
 
-      - name: Bundle live hunt data into site payload
-        run: |
-          mkdir -p app/public/data
-          cp -f data/hunt_status.json app/public/data/hunt_status.json
-          rm -rf app/public/data/hunts
-          cp -r data/hunts app/public/data/hunts
-          (cd app && npm run build)  # re-bake dist with fresh public/ payload
-
-      - name: Configure Pages
+      - name: Configure GitHub Pages
         uses: actions/configure-pages@v4
 
-      - name: Upload Pages artifact
+      - name: Upload Pages Artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: ./app/dist
+          path: './app/dist'
 
       - name: Deploy to GitHub Pages
         id: deployment
