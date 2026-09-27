@@ -1,0 +1,52 @@
+name: Stratum PWA Deployment
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Frontend Dependencies
+        working-directory: ./app
+        run: npm install --prefer-offline --no-audit --fund=false
+
+      - name: Build Static Site
+        working-directory: ./app
+        run: npm run build
+
+      - name: Copy Live Data into Dist Folder
+        run: |
+          mkdir -p app/dist/data
+          cp data/live_market_feed.json app/dist/data/latest_scan.json 2>/dev/null || echo '{"status":"offline","matches":[]}' > app/dist/data/latest_scan.json
+          cp data/portfolio_stats.json app/dist/data/portfolio_stats.json 2>/dev/null || true
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v4
+
+      - name: Upload Pages Artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: './app/dist'
+
+      - name: Deploy to GitHub Pages
+        uses: actions/deploy-pages@v4
