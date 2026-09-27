@@ -1,133 +1,120 @@
-name: Stratum Native Build Pipeline (Gradle Direct)
+name: Stratum Native Build Pipeline
 
 on:
   push:
     branches: [ main ]
-  workflow_dispatch: # Allows manual trigger
+  workflow_dispatch:
 
 permissions:
   contents: write
   pages: write
   id-token: write
 
+concurrency:
+  group: "stratum-build"
+  cancel-in-progress: true   # a new run cancels a stale one -> no more push races
+
 jobs:
-  # JOB 1: Run the Brain (Python Scanner)
   run-quant-engine:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      
       - name: Install Dependencies
         run: |
           pip install --upgrade pip
           pip install "numpy>=1.26,<2.0" "pandas>=2.1,<2.3" requests beautifulsoup4 python-dotenv pydantic
-      
       - name: Execute Market Scan
         env:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
         run: |
-          echo "Starting Stratum Engine..."
           python scripts/engine.py
-          
           if [ ! -f data/live_market_feed.json ]; then
-            echo "ERROR: live_market_feed.json was NOT created."
-            exit 1
+            echo "ERROR: live_market_feed.json was NOT created."; exit 1
           fi
-          
-          SIZE=$(stat -c%s "data/live_market_feed.json")
-          echo "Generated feed ($SIZE bytes)"
-
+          echo "Generated feed ($(stat -c%s data/live_market_feed.json) bytes)"
       - name: Upload Engine State Artifact
         uses: actions/upload-artifact@v4
         with:
           name: engine-state
-          path: data/live_market_feed.json
+          path: data/
           retention-days: 1
 
-  # JOB 2: Commit Data to Repo (For History/Audit Trail)
   commit-live-feed:
     needs: run-quant-engine
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      
       - name: Download Engine State
         uses: actions/download-artifact@v4
         with:
           name: engine-state
           path: data/
-          
-      - name: Commit Updated Feed
+      - name: Commit & Push (race-proof)
         run: |
           git config user.name "Stratum Bot"
           git config user.email "bot@stratum.ai"
-          git add data/live_market_feed.json
-          git diff --staged --quiet || git commit -m "chore: update live market feed $(date +%Y-%m-%d_%H:%M)"
-          git push
+          # stash the freshly generated scan outside git so a remote reset can't wipe it
+          mkdir -p /tmp/stratum_feed
+          cp data/live_market_feed.json /tmp/stratum_feed/ 2>/dev/null || true
+          cp data/portfolio_stats.json  /tmp/stratum_feed/ 2>/dev/null || true
+          # jump local branch to the TRUE remote tip -> our push is then always fast-forward
+          git fetch origin main
+          git reset --hard origin/main
+          mkdir -p data
+          cp /tmp/stratum_feed/live_market_feed.json data/ 2>/dev/null || true
+          cp /tmp/stratum_feed/portfolio_stats.json  data/ 2>/dev/null || true
+          git add data/
+          git diff --staged --quiet || git commit -m "chore: update live market feed $(date -u +%Y-%m-%d_%H:%M)"
+          git push origin main
 
-  # JOB 3: Build the Native App (Direct Gradle - NO EAS TOKEN NEEDED)
   build-android-apk:
     needs: [run-quant-engine, commit-live-feed]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-      
       - name: Install Frontend Dependencies
         working-directory: ./app
         run: npm install --prefer-offline --no-audit --fund=false
-
       - name: Copy Live Data into App Assets
         working-directory: ./app
         run: |
           mkdir -p assets/data
           cp ../data/live_market_feed.json assets/data/latest_scan.json
-          cp ../data/portfolio_stats.json assets/data/portfolio_stats.json || true
-
-      - name: Prebuild Native Projects (Generate android/iOS folders)
+          cp ../data/portfolio_stats.json  assets/data/portfolio_stats.json 2>/dev/null || true
+      - name: Prebuild Native Android Project
         working-directory: ./app
         run: npx expo prebuild --clean --platform android
-
       - name: Setup Java JDK
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '17'
-
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
-
-      - name: Accept Licenses & Build Release APK
+      - name: Build DEBUG APK (no keystore required)
         working-directory: ./app/android
         run: |
           chmod +x gradlew
-          ./gradlew assembleRelease --stacktrace --info
-
+          ./gradlew assembleDebug --stacktrace
       - name: Locate Built APK
         id: find_apk
         run: |
-          APK_PATH=$(find ./app/android/app/build/outputs/apk/release -name "*.apk" | head -n 1)
-          if [ -z "$APK_PATH" ]; then
-            echo "❌ ERROR: No APK found after build!"
-            ls -R ./app/android/app/build/outputs/
-            exit 1
-          fi
-          echo "✅ Found APK at: $APK_PATH"
+          APK_PATH=$(find ./app/android/app/build/outputs/apk -name "*.apk" | head -n 1)
+          if [ -z "$APK_PATH" ]; then echo "No APK produced"; ls -R ./app/android/app/build/outputs/ 2>/dev/null; exit 1; fi
+          echo "Found: $APK_PATH"
           echo "apk_path=$APK_PATH" >> $GITHUB_OUTPUT
-
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: stratum-apk-release
+          name: stratum-apk
           path: ${{ steps.find_apk.outputs.apk_path }}
           retention-days: 7
