@@ -45,7 +45,7 @@ import sys
 import threading
 import time
 import traceback
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, List, Optional
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -602,6 +602,215 @@ def run_hunt_sync(query: str, sport: str) -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Scheduled universe scan (`scan-slate`) — SCHEDULED SWARM architecture
+#
+# The swarm runs on a cron (see .github/workflows/deploy-swarm.yml), scans a
+# BROAD fixture slate (today + tomorrow, all configured leagues), computes
+# edges for every market it finds, and commits ONE file:
+#     data/market_universe.json   (schemas/market_universe.schema.json)
+# The PWA loads that file once and FILTERS client-side by the user's typed
+# match. Typing = instant; no per-hunt network round-trip, no token in the
+# browser, no git-push latency decoupling.
+#
+# It ALSO rewrites data/hunt_status.json as a REPLAYABLE log of the cycle so
+# the HunterConsole can honestly show what the agents did, stamped "last
+# scheduled scan @ <time>".
+# ---------------------------------------------------------------------------
+
+UNIVERSE_PATH = os.path.join(DATA_DIR, "market_universe.json")
+UNIVERSE_SCHEMA_PATH = os.path.join(_ROOT, "schemas",
+                                    "market_universe.schema.json")
+SCAN_DAYS_AHEAD = int(os.environ.get("STRATUM_SCAN_DAYS", "1"))
+CYCLE_INTERVAL_MIN = int(os.environ.get("STRATUM_SCAN_INTERVAL_MIN", "15"))
+
+
+def _validate_universe(universe: Dict[str, Any]) -> None:
+    """jsonschema gate: an invalid universe must never reach main."""
+    try:
+        import jsonschema
+    except ImportError:
+        return  # validator optional at runtime; CI always has it
+    with open(UNIVERSE_SCHEMA_PATH, encoding="utf-8") as fh:
+        schema = json.load(fh)
+    jsonschema.validate(instance=universe, schema=schema)
+
+
+def _fixture_from_event(lg: Dict[str, str], ev: Dict[str, Any],
+                        rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Run the quant engine over one ESPN event's real price rows and shape
+    a universe fixture record. Zero-fabrication rule holds: no rows in,
+    empty top_edges out."""
+    comp = (ev.get("competitions") or [{}])[0]
+    competitors = comp.get("competitors") or []
+    home = next((c for c in competitors if c.get("homeAway") == "home"), {})
+    away = next((c for c in competitors if c.get("homeAway") == "away"), {})
+    home_name = ((home.get("team") or {}).get("displayName")
+                 or (home.get("team") or {}).get("shortDisplayName") or "HOME")
+    away_name = ((away.get("team") or {}).get("displayName")
+                 or (away.get("team") or {}).get("shortDisplayName") or "AWAY")
+
+    state: Dict[str, Any] = {"odds_history": {}, "last_run": None}
+    markets = analyze_rows_cached(rows, state, str(ev.get("id", ""))) \
+        if rows else []
+    scored: List[Dict[str, Any]] = []
+    for m in markets:
+        ev_pct = float(m.get("ev_percent", 0.0))
+        book_odds = float((m.get("best") or {}).get("decimal", 0) or 0)
+        if ev_pct <= 0 or book_odds <= 1.0 or m.get("fair_probability") is None:
+            continue
+        conf = max(0.0, min(100.0, float(m.get("confidence", 0.0))))
+        scored.append({
+            "market": (f"{m.get('name') or m.get('type')}"
+                       + (f" {m['line']:+g}" if m.get("line") is not None else "")),
+            "selection": m.get("selection", "?"),
+            "book_odds": round(book_odds, 3),
+            "fair_odds": round(100.0 / float(m["fair_probability"]), 3),
+            "ev_percent": round(ev_pct, 2),
+            "confidence_score": round(conf, 1),
+            "kelly_stake_pct": round(max(0.0, float(m.get("kelly_stake", 0.0))) * 100.0, 2),
+            "reasoning_summary": _reasoning_summary(m, []),
+        })
+    scored.sort(key=lambda e: -(e["ev_percent"] * e["confidence_score"]))
+    return {
+        "fixture_id": f"espn_{ev.get('id')}",
+        "home": home_name,
+        "away": away_name,
+        "sport": "soccer",           # slate currently covers soccer boards
+        "league": lg.get("display") or lg.get("key", ""),
+        "kickoff_utc": ev.get("date", ""),
+        "markets_scanned": len(markets),
+        "top_edges": scored[:10],
+        "agent_trace_lines": [],     # filled by the pipeline below
+    }
+
+
+def analyze_rows_cached(rows, state, event_id):
+    """Thin indirection so the actuary import stays lazy & testable."""
+    from analyzer import analyze_rows
+    return analyze_rows(rows, state, event_id)
+
+
+def scan_slate() -> Dict[str, Any]:
+    """Build the fixture slate, run the math pipeline per fixture, publish
+    data/market_universe.json + a replayable hunt_status.json. Returns the
+    universe document (also written to disk)."""
+    import hunter_api
+
+    t0 = time.monotonic()
+    cycle_stamp = utc_now_iso()
+    print(f"[swarm] UNIVERSE SCAN started :: window=d1+d{SCAN_DAYS_AHEAD + 1} "
+          f"@ {cycle_stamp}", flush=True)
+
+    boards = hunter_api.espn_slate_boards(days_ahead=SCAN_DAYS_AHEAD)
+    print(f"[swarm] slate built: {len(boards)} events across "
+          f"{len({lg['key'] for lg, _ in boards})} leagues "
+          f"({time.monotonic() - t0:.1f}s)", flush=True)
+
+    fixtures: List[Dict[str, Any]] = []
+    priced_events = 0
+    total_rows = 0
+    for lg, ev in boards:
+        rows = hunter_api._espn_event_rows(ev)
+        if not rows:
+            continue
+        priced_events += 1
+        total_rows += len(rows)
+        fx = _fixture_from_event(lg, ev, rows)
+        name = f"{fx['home']} vs {fx['away']}"
+        fx["agent_trace_lines"] = [
+            {"agent": "SCOUT",
+             "text": f"Board {lg['key']}: harvested {len(rows)} real price "
+                     f"rows for '{name}'",
+             "ts": round(time.monotonic() - t0, 2)},
+            {"agent": "ACTUARY",
+             "text": f"No-vig pass on {fx['markets_scanned']} markets -> "
+                     f"{len(fx['top_edges'])} positive-EV legs",
+             "ts": round(time.monotonic() - t0, 2)},
+            {"agent": "STRATEGIST",
+             "text": (f"Top Pick: {fx['top_edges'][0]['selection']} "
+                      f"@ {fx['top_edges'][0]['book_odds']:.2f} "
+                      f"(Conf: {int(fx['top_edges'][0]['confidence_score'])}%)"
+                      if fx["top_edges"] else
+                      "No verified edge after vig removal — honest empty"),
+             "ts": round(time.monotonic() - t0, 2)},
+        ]
+        fixtures.append(fx)
+
+    fixtures.sort(key=lambda f: -(sum(e["ev_percent"] * e["confidence_score"]
+                                      for e in f["top_edges"]) or 0))
+
+    universe = {
+        "schema_version": SWARM_VERSION,
+        "generated_at_utc": cycle_stamp,
+        "next_refresh_estimate_utc": (
+            datetime.now(timezone.utc)
+            + timedelta(minutes=CYCLE_INTERVAL_MIN)
+        ).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "sources_status": {
+            "espn_mirror": f"ok({priced_events})" if priced_events
+                           else "no_fixture_in_board",
+            "betika_json": "deferred",
+            "odibets_html": "deferred",
+            "flashscore": "deferred",
+        },
+        "fixture_count": len(fixtures),
+        "fixtures": fixtures,
+        "data_policy": "real scraped prices only; empty top_edges means no "
+                       "verified edge — never fabricated odds",
+        "scan_stats": {
+            "events_seen": len(boards),
+            "events_priced": priced_events,
+            "raw_price_rows": total_rows,
+            "elapsed_s": round(time.monotonic() - t0, 1),
+        },
+    }
+
+    _validate_universe(universe)
+    atomic_write(UNIVERSE_PATH, universe)
+
+    # Replayable console snapshot: same shape the PWA poller expects, marked
+    # complete so the UI renders it as "last scheduled scan", never as live.
+    trace: List[Dict[str, Any]] = []
+    seen: set = set()
+    for fx in fixtures[:60]:
+        for ln in fx["agent_trace_lines"]:
+            key = (ln["agent"], ln["text"])
+            if key in seen:
+                continue
+            seen.add(key)
+            trace.append(ln)
+    n_edges = sum(len(f["top_edges"]) for f in fixtures)
+    replay_lines = ([{"t": 0.0, "agent": "SWARM",
+                      "msg": f"Scheduled universe scan @ {cycle_stamp} "
+                             f"(replay — not a live hunt)"}]
+                    + [{"t": ln["ts"], "agent": ln["agent"], "msg": ln["text"]}
+                       for ln in trace]
+                    + [{"t": round(time.monotonic() - t0, 2), "agent": "SWARM",
+                        "msg": f"Cycle complete: {len(fixtures)} fixtures, "
+                               f"{n_edges} ranked edges, "
+                               f"{universe['scan_stats']['elapsed_s']}s"}])
+    atomic_write(STATUS_PATH, {
+        "version": SWARM_VERSION,
+        "query": "(scheduled universe scan)",
+        "sport": "auto",
+        "status": "complete",
+        "stage": "complete",
+        "progress": 1.0,
+        "agents": {a: "done" for a in VALID_AGENTS},
+        "elapsed_s": round(time.monotonic() - t0, 1),
+        "updated_at": cycle_stamp,
+        "lines": replay_lines,
+        "result": None,
+        "message": "",
+        "mode": "scheduled_replay",
+        "universe_fixture_count": len(fixtures),
+    })
+    print(f"[swarm] universe published: {len(fixtures)} fixtures, "
+          f"{n_edges} edges -> {UNIVERSE_PATH}", flush=True)
+    return universe
+
+
+# ---------------------------------------------------------------------------
 # Dev server (stdlib only) — powers the live console without GitHub round-trips
 # ---------------------------------------------------------------------------
 
@@ -690,14 +899,27 @@ def main(argv: Optional[List[str]] = None) -> int:
     sub = ap.add_subparsers(dest="cmd")
     serve_p = sub.add_parser("serve", help="run the swarm dev server")
     serve_p.add_argument("--port", type=int, default=8788)
+    sub.add_parser("scan-slate",
+                   help="scheduled universe scan -> data/market_universe.json "
+                        "(cron entry for deploy-swarm.yml)")
     args = ap.parse_args(argv)
 
     if args.cmd == "serve":
         serve(args.port)
         return 0
 
+    if args.cmd == "scan-slate":
+        try:
+            u = scan_slate()
+        except Exception as exc:
+            print(f"[swarm] scan-slate FAILED: {type(exc).__name__}: {exc}",
+                  file=sys.stderr)
+            return 1
+        # Non-empty universe OR honest typed failure — never a silent empty.
+        return 0 if u["fixture_count"] > 0 else 2
+
     if not args.query:
-        ap.error("--query is required (or use: serve)")
+        ap.error("--query is required (or use: serve / scan-slate)")
 
     report = run_hunt_sync(args.query, args.sport)
     text = json.dumps(report, indent=2)
