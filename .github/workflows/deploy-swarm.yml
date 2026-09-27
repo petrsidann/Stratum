@@ -1,9 +1,9 @@
 name: Stratum Swarm Deploy
 
 on:
-  workflow_dispatch: {}   # manual trigger; scan-slate needs NO inputs
+  workflow_dispatch: {}
   schedule:
-    - cron: '*/15 * * * *'  # auto-rescan every 15 minutes
+    - cron: '*/15 * * * *'
   push:
     paths:
       - 'scripts/**'
@@ -20,7 +20,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  scan-universe:                    # ← Job A (renamed from run-swarm)
+  scan-universe:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Repository
@@ -30,7 +30,6 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-          # cache removed intentionally
 
       - name: Install Dependencies
         run: |
@@ -43,7 +42,6 @@ jobs:
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
         run: |
           echo "Launching scheduled swarm across today+tomorrow slate..."
-          # CRITICAL FIX: use scan-slate subcommand so push/schedule triggers work without inputs
           python scripts/swarm_runner.py scan-slate
 
           if [ ! -f data/market_universe.json ]; then
@@ -57,32 +55,42 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: hunt-output
-          path: data/               # includes both market_universe.json AND hunts/ subdir
+          path: data/
           retention-days: 7
 
-  commit-results:                   # ← Job B now correctly depends on scan-universe
-    needs: scan-universe            # FIXED: was 'run-swarm', must match actual job ID above
+  commit-results:
+    needs: scan-universe
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Repository
+      - name: Checkout Repository on main branch
         uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
 
       - name: Download Hunt Output
         uses: actions/download-artifact@v4
         with:
           name: hunt-output
-          path: .                   # restores full data/ tree including hunts/<cycle>/
+          path: data/
 
       - name: Commit Results to Repo
         run: |
           git config user.name "Stratum Bot"
           git config user.email "bot@stratum.ai"
+          git checkout main
+          git pull origin main
           git add data/
-          git diff --staged --quiet || git commit -m "swarm: universe scan @ $(date -u +%FT%TZ)"
-          git push origin main
+          if ! git diff --staged --quiet; then
+            echo "Changes detected. Creating commit..."
+            git commit -m "swarm: universe scan @ $(date -u +%FT%TZ)"
+            git push origin main
+          else
+            echo "No changes detected. Skipping push."
+          fi
 
-  build-deploy-pwa:                 # ← Job C depends on commit-results (valid DAG now)
-    needs: commit-results           # Already correct here; only needed because upstream IDs were wrong before
+  build-deploy-pwa:
+    needs: commit-results
     runs-on: ubuntu-latest
     environment:
       name: github-pages
@@ -91,7 +99,7 @@ jobs:
       - name: Checkout Latest Code
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.sha }}
+          ref: main
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
