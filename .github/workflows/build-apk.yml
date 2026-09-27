@@ -1,4 +1,4 @@
-name: Stratum Native Build Pipeline
+name: Stratum Native Build Pipeline (Gradle Direct)
 
 on:
   push:
@@ -6,8 +6,8 @@ on:
   workflow_dispatch: # Allows manual trigger
 
 permissions:
-  contents: write # Needed to commit updates back to repo if necessary
-  pages: write    # Optional, if we deploy web preview later
+  contents: write
+  pages: write
   id-token: write
 
 jobs:
@@ -25,7 +25,6 @@ jobs:
       - name: Install Dependencies
         run: |
           pip install --upgrade pip
-          # Using flexible versions wrapped in quotes to prevent shell errors
           pip install "numpy>=1.26,<2.0" "pandas>=2.1,<2.3" requests beautifulsoup4 python-dotenv pydantic
       
       - name: Execute Market Scan
@@ -36,7 +35,6 @@ jobs:
           echo "Starting Stratum Engine..."
           python scripts/engine.py
           
-          # Verify output exists
           if [ ! -f data/live_market_feed.json ]; then
             echo "ERROR: live_market_feed.json was NOT created."
             exit 1
@@ -44,9 +42,7 @@ jobs:
           
           SIZE=$(stat -c%s "data/live_market_feed.json")
           echo "Generated feed ($SIZE bytes)"
-          
-          # CRITICAL FIX: Upload the data as an artifact named 'engine-state'
-          # This allows Job 3 to download it reliably without relying on git commits
+
       - name: Upload Engine State Artifact
         uses: actions/upload-artifact@v4
         with:
@@ -75,7 +71,7 @@ jobs:
           git diff --staged --quiet || git commit -m "chore: update live market feed $(date +%Y-%m-%d_%H:%M)"
           git push
 
-  # JOB 3: Build the Native App (Expo/EAS)
+  # JOB 3: Build the Native App (Direct Gradle - NO EAS TOKEN NEEDED)
   build-android-apk:
     needs: [run-quant-engine, commit-live-feed]
     runs-on: ubuntu-latest
@@ -87,35 +83,51 @@ jobs:
         with:
           node-version: '20'
       
-      - name: Install EAS CLI & Expo Dependencies
+      - name: Install Frontend Dependencies
+        working-directory: ./app
+        run: npm install --prefer-offline --no-audit --fund=false
+
+      - name: Copy Live Data into App Assets
         working-directory: ./app
         run: |
-          # 1. Install global tools first
-          npm install -g eas-cli --no-audit --fund=false
-          
-          # 2. CRITICAL FIX: Use 'npm install' instead of 'npm ci'
-          # 'npm ci' fails without a lockfile. 'npm install' creates one if missing.
-          npm install --prefer-offline --no-audit --fund=false
-          
-      - name: Configure Environment Variables for Build
+          mkdir -p assets/data
+          cp ../data/live_market_feed.json assets/data/latest_scan.json
+          cp ../data/portfolio_stats.json assets/data/portfolio_stats.json || true
+
+      - name: Prebuild Native Projects (Generate android/iOS folders)
         working-directory: ./app
+        run: npx expo prebuild --clean --platform android
+
+      - name: Setup Java JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Accept Licenses & Build Release APK
+        working-directory: ./app/android
         run: |
-          # Pass the API URL or local path logic here if needed
-          # For MVP, the app reads directly from raw.githubusercontent.com
-          echo "EXPO_PUBLIC_ENV=production" >> .env.production
-          
-      - name: Build Android APK via EAS
-        working-directory: ./app
-        env:
-          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }} # You MUST create this secret in GitHub Settings -> Secrets
+          chmod +x gradlew
+          ./gradlew assembleRelease --stacktrace --info
+
+      - name: Locate Built APK
+        id: find_apk
         run: |
-          # Use EAS Build to generate a standalone APK
-          # --profile production ensures optimized release build
-          eas build --platform android --profile production --non-interactive --output=stratum-release.apk
-      
+          APK_PATH=$(find ./app/android/app/build/outputs/apk/release -name "*.apk" | head -n 1)
+          if [ -z "$APK_PATH" ]; then
+            echo "❌ ERROR: No APK found after build!"
+            ls -R ./app/android/app/build/outputs/
+            exit 1
+          fi
+          echo "✅ Found APK at: $APK_PATH"
+          echo "apk_path=$APK_PATH" >> $GITHUB_OUTPUT
+
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
           name: stratum-apk-release
-          path: ./app/stratum-release.apk
+          path: ${{ steps.find_apk.outputs.apk_path }}
           retention-days: 7
