@@ -1,6 +1,6 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
-import { TopEdge } from '../utils/apiClient';
+import { MarketFeed, TopEdge, fetchMarketFeed } from '../utils/apiClient';
 import {
   Colors,
   Fonts,
@@ -30,6 +30,16 @@ interface Props {
  */
 export default function OddsCard({ edge }: Props) {
   const navigate = useNavigate();
+
+  // Hunter Mode reuses this card for hunt-scoped rows whose match_id does
+  // not exist in the cron feed; navigating there would render an empty
+  // detail screen. Only navigate when the match is actually present.
+  const openMatch = async () => {
+    const feed: MarketFeed = await fetchMarketFeed(false);
+    if ((feed.matches ?? []).some((m) => m.id === edge.match_id)) {
+      navigate(`/match/${encodeURIComponent(edge.match_id)}`);
+    }
+  };
   const ev = edge.ev_percent;
   const color = evColor(ev);
   const confColor = confidenceColor(edge.confidence);
@@ -40,7 +50,7 @@ export default function OddsCard({ edge }: Props) {
   return (
     <button
       type="button"
-      onClick={() => navigate(`/match/${encodeURIComponent(edge.match_id)}`)}
+      onClick={openMatch}
       style={styles.card}
     >
       <div style={styles.headerRow}>
