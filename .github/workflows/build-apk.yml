@@ -1,0 +1,135 @@
+name: Stratum Build Pipeline
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/**'
+      - 'app/**'
+      - '.github/workflows/build-apk.yml'
+  workflow_dispatch: {}
+
+concurrency:
+  group: stratum-pipeline
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  run-engine:
+    name: Run Quant Engine
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install engine dependencies
+        run: pip install --quiet requests beautifulsoup4
+
+      - name: Execute market scan
+        env:
+          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+          STRATUM_BUDGET_S: '600'
+        run: python scripts/engine.py
+
+      - name: Upload feed artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-market-feed
+          path: data/live_market_feed.json
+
+      - name: Upload engine state artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: engine-state
+          path: data/.engine_state.json
+          if-no-files-found: ignore
+
+  commit-data:
+    name: Commit Live Feed
+    needs: run-engine
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: live-market-feed
+          path: data
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: engine-state
+          path: data
+        continue-on-error: true
+
+      - name: Push updated feed
+        run: |
+          git config user.name "stratum-engine[bot]"
+          git config user.email "engine@stratum.local"
+          git add data/live_market_feed.json || true
+          git add data/.engine_state.json || true
+          if ! git diff --cached --quiet; then
+            git commit -m "engine: update live market feed ($(date -u +%Y-%m-%dT%H:%M:%SZ))"
+            git pull --rebase origin main || true
+            git push origin HEAD:main
+          else
+            echo "No feed changes to commit."
+          fi
+
+  build-apk:
+    name: Build Android APK
+    needs: commit-data
+    # Only rebuild the client when app sources changed or on manual dispatch;
+    # the 15-minute cron refreshes data, not the binary.
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'push' &&
+       (contains(github.event.head_commit.message, 'app:') ||
+        github.event.repository.pushed_at == github.run_started_at))
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install app dependencies
+        working-directory: app
+        run: npm install --no-audit --no-fund
+
+      - name: Export Android bundle
+        working-directory: app
+        env:
+          CI: 'true'
+          EXPO_NO_TELEMETRY: '1'
+        run: npx expo export --platform android --output-dir dist
+
+      - name: Assemble debug-installable APK via EAS local build fallback
+        working-directory: app
+        continue-on-error: true
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: |
+          npm install -g @expo/cli eas-cli --no-audit --no-fund
+          eas build -p android --profile apk --non-interactive --output stratum-release.apk || true
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: stratum-release-apk
+          path: app/stratum-release.apk
+          if-no-files-found: warn
