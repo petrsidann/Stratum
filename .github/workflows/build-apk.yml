@@ -90,9 +90,13 @@ jobs:
       - name: Install EAS CLI & Expo Dependencies
         working-directory: ./app
         run: |
-          npm install -g eas-cli
-          npm ci --prefer-offline --no-audit
-      
+          # 1. Install global tools first
+          npm install -g eas-cli --no-audit --fund=false
+          
+          # 2. CRITICAL FIX: Use 'npm install' instead of 'npm ci'
+          # 'npm ci' fails without a lockfile. 'npm install' creates one if missing.
+          npm install --prefer-offline --no-audit --fund=false
+          
       - name: Configure Environment Variables for Build
         working-directory: ./app
         run: |
