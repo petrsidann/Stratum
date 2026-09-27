@@ -1,6 +1,10 @@
-# Compiled and build artifacts
+# Python
 __pycache__/
 *.pyc
 
-# Cache and temporary files
-.cache/
+# Node/Expo Dependencies
+node_modules/
+
+# Logs and Temp Files
+*.log
+*.tmp
