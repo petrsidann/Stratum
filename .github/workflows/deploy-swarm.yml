@@ -1,18 +1,9 @@
 name: Stratum Swarm Deploy
 
 on:
-  workflow_dispatch:
-    inputs:
-      match_query:
-        description: 'Match to hunt (e.g., Al Hilal vs Al Nassr)'
-        required: true
-        type: string
-      sport:
-        description: 'Sport Category'
-        required: true
-        type: choice
-        options: [soccer, nba, nfl, mlb, nhl]
-        default: soccer
+  workflow_dispatch: {}   # manual trigger; scan-slate needs NO inputs
+  schedule:
+    - cron: '*/15 * * * *'  # auto-rescan every 15 minutes
   push:
     paths:
       - 'scripts/**'
@@ -29,7 +20,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  scan-universe:
+  scan-universe:                    # ← Job A (renamed from run-swarm)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Repository
@@ -39,37 +30,38 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-          # CACHE REMOVED TO PREVENT MISSING FILE ERROR
+          # cache removed intentionally
 
       - name: Install Dependencies
         run: |
           pip install --upgrade pip
           pip install aiohttp matplotlib numpy pandas requests beautifulsoup4 python-dotenv groq google-genai pydantic jsonschema
 
-      - name: Execute Hunter Swarm
+      - name: Execute Hunter Swarm (Input-Free Slate Scan)
         env:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
         run: |
-          echo "Deploying Hunters for: ${{ inputs.match_query }}"
-          python scripts/swarm_runner.py --query "${{ inputs.match_query }}" --sport "${{ inputs.sport }}"
-          
-          # Verify output exists before uploading artifact
-          if [ ! -f data/hunts/latest.json ]; then
-            echo "ERROR: swarm produced no result file."
+          echo "Launching scheduled swarm across today+tomorrow slate..."
+          # CRITICAL FIX: use scan-slate subcommand so push/schedule triggers work without inputs
+          python scripts/swarm_runner.py scan-slate
+
+          if [ ! -f data/market_universe.json ]; then
+            echo "ERROR: market_universe.json was not created."
             exit 1
           fi
-          echo "Swarm complete. Result size: $(stat -c%s data/hunts/latest.json) bytes"
+          SIZE=$(stat -c%s data/market_universe.json)
+          echo "Swarm complete. Universe size: $SIZE bytes"
 
       - name: Upload Hunt Output Artifact
         uses: actions/upload-artifact@v4
         with:
           name: hunt-output
-          path: data/hunts/
+          path: data/               # includes both market_universe.json AND hunts/ subdir
           retention-days: 7
 
-  commit-results:
-    needs: run-swarm
+  commit-results:                   # ← Job B now correctly depends on scan-universe
+    needs: scan-universe            # FIXED: was 'run-swarm', must match actual job ID above
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Repository
@@ -79,19 +71,18 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: hunt-output
-          path: .
+          path: .                   # restores full data/ tree including hunts/<cycle>/
 
       - name: Commit Results to Repo
         run: |
           git config user.name "Stratum Bot"
           git config user.email "bot@stratum.ai"
-          git add data/hunts/
-          # Only commit if there are actual changes
-          git diff --staged --quiet || git commit -m "swarm: ${{ inputs.match_query }} @ $(date -u +%FT%TZ)"
+          git add data/
+          git diff --staged --quiet || git commit -m "swarm: universe scan @ $(date -u +%FT%TZ)"
           git push origin main
 
-  build-deploy-pwa:
-    needs: commit-results
+  build-deploy-pwa:                 # ← Job C depends on commit-results (valid DAG now)
+    needs: commit-results           # Already correct here; only needed because upstream IDs were wrong before
     runs-on: ubuntu-latest
     environment:
       name: github-pages
@@ -100,7 +91,7 @@ jobs:
       - name: Checkout Latest Code
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.sha }} # Ensure we grab the freshly committed results
+          ref: ${{ github.sha }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
