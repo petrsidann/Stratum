@@ -131,27 +131,75 @@ class DomainRateLimiter:
 _LIMITER = DomainRateLimiter(RATE_LIMIT_S)
 
 
+class FetchError(Exception):
+    """Typed HTTP fetch failure so callers can distinguish WAF blocks, dead
+    routes and timeouts instead of collapsing everything into 'empty'."""
+
+    def __init__(self, kind: str, url: str, status: int = 0):
+        super().__init__(f"{kind} for {url}")
+        self.kind = kind          # blocked_waf | not_found | timeout | error
+        self.url = url
+        self.status = status
+
+
+# ESPN's Akamai front door fingerprints the *browser-style* header set
+# (HTML-first Accept + Accept-Language) that we use for bookmaker pages and
+# answers it with HTTP 403 -- while identical curl/requests calls carrying
+# ONLY `Accept: application/json` (or no extra headers at all) get 200.
+# Verified live during the Austria-vs-Kosovo diagnostic: same URL, same IP,
+# same second: browser headers -> 403, minimal JSON headers -> 200.
+JSON_HEADERS = {
+    "User-Agent": USER_AGENTS[0],
+    "Accept": "application/json",
+}
+
+
 def http_get(url: str, timeout: float = SOURCE_TIMEOUT_S,
-             headers: Optional[Dict[str, str]] = None) -> Optional[requests.Response]:
+             headers: Optional[Dict[str, str]] = None,
+             strict: bool = False) -> Optional[requests.Response]:
     """Single-shot GET with per-domain rate limiting and a hard timeout.
-    Returns None on ANY failure -- callers then contribute zero rows."""
+
+    Default mode returns None on failure (legacy behaviour). With
+    ``strict=True`` a typed FetchError is raised instead so scouts can label
+    sources BLOCKED_BY_WAF / TIMEOUT_ON_LOAD / NOT_FOUND rather than a
+    generic 'empty'. Pass ``headers=JSON_HEADERS`` for JSON APIs whose WAF
+    rejects browser-style headers (see note above)."""
     _LIMITER.wait(url)
-    hdrs = {
-        "User-Agent": USER_AGENTS[0],
-        "Accept-Language": "en-US,en;q=0.9",
-        "Accept": "text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8",
-    }
-    if headers:
-        hdrs.update(headers)
+    if headers is not None:
+        hdrs = dict(headers)   # exact control for API endpoints
+    else:
+        hdrs = {
+            "User-Agent": USER_AGENTS[0],
+            "Accept-Language": "en-US,en;q=0.9",
+            "Accept": ("text/html,application/xhtml+xml,application/json;"
+                       "q=0.9,*/*;q=0.8"),
+        }
     try:
         resp = requests.get(url, timeout=timeout, headers=hdrs)
         if resp.status_code == 200:
             return resp
-        log(f"HTTP {resp.status_code} {url}")
+        if resp.status_code in (401, 403, 429):
+            log(f"HTTP {resp.status_code} [BLOCKED_BY_WAF] {url}")
+            if strict:
+                raise FetchError("blocked_waf", url, resp.status_code)
+        elif resp.status_code in (404, 410):
+            log(f"HTTP {resp.status_code} [NOT_FOUND] {url}")
+            if strict:
+                raise FetchError("not_found", url, resp.status_code)
+        else:
+            log(f"HTTP {resp.status_code} {url}")
+            if strict:
+                raise FetchError("error", url, resp.status_code)
     except requests.exceptions.Timeout:
-        log(f"TIMEOUT (> {timeout:.0f}s, killed) {url}")
+        log(f"TIMEOUT (> {timeout:.0f}s, killed) [TIMEOUT_ON_LOAD] {url}")
+        if strict:
+            raise FetchError("timeout", url)
+    except FetchError:
+        raise
     except Exception as exc:
         log(f"fetch error {url}: {type(exc).__name__}")
+        if strict:
+            raise FetchError("error", url)
     return None
 
 
@@ -207,27 +255,59 @@ def parse_decimal_odds(raw: str) -> Optional[float]:
 # Scraper 1: Betika.co.ke (Kenyan bookmaker public board)
 # ---------------------------------------------------------------------------
 
+USE_BROWSER_FALLBACK = (os.getenv("STRATUM_ENABLE_BROWSER_SCRAPING",
+                                  "false").lower() == "true")
+
+# SPA-shell detector: Betika/Odibets boards are Vue apps served as a tiny
+# prerender shell (<div id=app> + webpack bundles); decimal odds only exist
+# after JS hydration, so static HTML parsing can NEVER see them. Verified
+# live: betika soccer board = HTTP 200, 7.4 KB, zero odd strings.
+_SPA_SHELL_RE = re.compile(r'<div[^>]+id=["\']?app["\']?', re.I)
+
+
+def _is_spa_shell(html: str) -> bool:
+    return len(html or "") < 60_000 and bool(_SPA_SHELL_RE.search(html or ""))
+
+
 def scrape_betika(tokens: List[str]) -> Tuple[List[Dict[str, Any]], str]:
-    """Betika's public site is typically Cloudflare-fronted for datacenter
-    IPs. We attempt the real board endpoints; whatever they return is parsed,
-    anything else yields zero rows (never invented ones)."""
+    """STEP-2 FINDING (Austria-vs-Kosovo repair): no hidden JSON endpoint is
+    reachable without a browser. Every guessed /api/* route on betika.com
+    returns the SAME 7,422-byte SPA shell (soft-404 to text/html), and the
+    hashed webpack bundles referenced by the prerenderer are also replaced by
+    that shell for non-browser clients -- there is nothing to reverse-engineer
+    server-side. Marked DEFERRED_TO_PLAYWRIGHT_PHASE_B.
+
+    Statuses now distinguish failure modes explicitly:
+      blocked_waf | timeout | spa_shell_deferred_to_pw | empty | ok."""
     urls = [
         "https://www.betika.com/en-int/sport/soccer",
         "https://betika.com/en/sport/football",
     ]
+    last_status = "blocked_waf"
     for url in urls:
-        resp = http_get(url)
-        if resp is None or not HAS_BS4:
+        try:
+            resp = http_get(url, strict=True)
+        except FetchError as fe:
+            last_status = fe.kind
+            continue
+        if resp is None:
+            last_status = "error"
             continue
         html = resp.text
         if _looks_blocked(html):
-            log("betika: blocked/anti-bot page -> 0 rows")
+            log("betika: anti-bot challenge page -> BLOCKED_BY_WAF")
+            last_status = "blocked_waf"
             continue
+        if _is_spa_shell(html):
+            log("betika: JS-rendered SPA shell (no odds in static HTML) "
+                "-> DEFERRED_TO_PLAYWRIGHT_PHASE_B")
+            last_status = "spa_shell_deferred_to_pw"
+            continue
+        if not HAS_BS4:
+            return [], "error"
         rows = _parse_book_html(resp, tokens, "Betika")
-        if rows:
-            return rows, "ok"
-        return rows, "empty"
-    return [], "blocked"
+        return (rows, "ok") if rows else ([], "empty")
+    return [], last_status
 
 
 # ---------------------------------------------------------------------------
@@ -235,22 +315,36 @@ def scrape_betika(tokens: List[str]) -> Tuple[List[Dict[str, Any]], str]:
 # ---------------------------------------------------------------------------
 
 def scrape_odibets(tokens: List[str]) -> Tuple[List[Dict[str, Any]], str]:
+    """Same situation as Betika: `<div id=app>` Vue shell, odds hydrated
+    client-side; `/today` additionally 404s. DEFERRED_TO_PLAYWRIGHT_PHASE_B."""
     urls = [
         "https://odibets.com/league/117-INT-Friendly-Club",
         "https://odibets.com/today",
     ]
+    last_status = "blocked_waf"
     for url in urls:
-        resp = http_get(url)
-        if resp is None or not HAS_BS4:
+        try:
+            resp = http_get(url, strict=True)
+        except FetchError as fe:
+            last_status = fe.kind
+            continue
+        if resp is None:
+            last_status = "error"
             continue
         if _looks_blocked(resp.text):
-            log("odibets: blocked/anti-bot page -> 0 rows")
+            log("odibets: anti-bot challenge page -> BLOCKED_BY_WAF")
+            last_status = "blocked_waf"
             continue
+        if _is_spa_shell(resp.text):
+            log("odibets: JS-rendered SPA shell (no odds in static HTML) "
+                "-> DEFERRED_TO_PLAYWRIGHT_PHASE_B")
+            last_status = "spa_shell_deferred_to_pw"
+            continue
+        if not HAS_BS4:
+            return [], "error"
         rows = _parse_book_html(resp, tokens, "Odibets")
-        if rows:
-            return rows, "ok"
-        return rows, "empty"
-    return [], "blocked"
+        return (rows, "ok") if rows else ([], "empty")
+    return [], last_status
 
 
 def _looks_blocked(html: str) -> bool:
@@ -360,11 +454,15 @@ def _clean_selection(raw: str, book: str) -> Optional[str]:
 def scrape_flashscore(tokens: List[str]) -> Tuple[List[Dict[str, Any]], str]:
     """Flashscore renders live data via JS/WebSocket, but its static HTML
     still ships bookmaker odds mirrors on match preview pages. We search the
-    public site for the fixture and parse whatever REAL prices come back."""
-    search = http_get(f"https://www.flashscore.com/search/?searchTerm="
-                      f"{quote_plus(' '.join(tokens))}")
+    public site for the fixture and parse whatever REAL prices come back.
+    Typed failure statuses: blocked_waf / not_found / timeout / empty."""
+    try:
+        search = http_get(f"https://www.flashscore.com/search/?searchTerm="
+                          f"{quote_plus(' '.join(tokens))}", strict=True)
+    except FetchError as fe:
+        return [], fe.kind
     if search is None:
-        return [], "empty"
+        return [], "error"
     soup = BeautifulSoup(search.text, "lxml") if HAS_BS4 else None
     href = None
     if soup:
@@ -374,7 +472,10 @@ def scrape_flashscore(tokens: List[str]) -> Tuple[List[Dict[str, Any]], str]:
                 break
     if not href:
         return [], "empty"
-    page = http_get(href)
+    try:
+        page = http_get(href, strict=True)
+    except FetchError as fe:
+        return [], fe.kind
     if page is None:
         return [], "error"
     rows: List[Dict[str, Any]] = []
@@ -405,12 +506,31 @@ def scrape_flashscore(tokens: List[str]) -> Tuple[List[Dict[str, Any]], str]:
 _ESPN_BASE = "https://site.api.espn.com/apis/site/v2/sports/soccer"
 _espn_leagues_cache: List[str] = []
 
+# Continental competitions where non-domestic fixtures (nations cups, WC
+# qualifiers, friendlies like Austria vs Kosovo) live. Appended to the
+# discovered list and used as the fallback set when league discovery itself
+# is WAF-blocked -- previously these were missing entirely, so international
+# matches could never be found even with a healthy connection.
+ESPN_CONTINENTAL_LEAGUES = ["uefa.nations", "fifa.worldq", "uefa.euroq",
+                            "caf.champions", "concacaf.league"]
+
+
+def _espn_get(url: str) -> Optional[requests.Response]:
+    """GET an ESPN public API endpoint with headers Akamai accepts.
+
+    IMPORTANT (Austria-vs-Kosovo repair): the default browser-style header
+    set in http_get() (HTML-first Accept + Accept-Language) is fingerprinted
+    by ESPN's Akamai WAF and answered with HTTP 403 from datacenter IPs,
+    while the same client with ONLY `Accept: application/json` gets 200.
+    So we pass the minimal JSON_HEADERS verbatim here."""
+    return http_get(url, headers=JSON_HEADERS)
+
 
 def espn_soccer_leagues() -> List[str]:
     global _espn_leagues_cache
     if _espn_leagues_cache:
         return _espn_leagues_cache
-    resp = http_get(_ESPN_BASE)
+    resp = _espn_get(_ESPN_BASE)
     leagues: List[str] = []
     if resp is not None:
         try:
@@ -420,24 +540,47 @@ def espn_soccer_leagues() -> List[str]:
                     leagues.append(key)
         except Exception:
             leagues = []
-    if not leagues:  # sane fallback set if discovery is unreachable
-        leagues = ["eng.1", "esp.1", "ita.1", "ger.1", "fra.1",
-                   "uefa.champions", "uefa.europa", "ksa.1"]
-    _espn_leagues_cache = leagues[:24]
+    # Continental keys FIRST: internationals are exactly what the domestic
+    # discovery list kept missing. Dedupe, keep order.
+    ordered: List[str] = []
+    for key in ESPN_CONTINENTAL_LEAGUES + leagues:
+        if key not in ordered:
+            ordered.append(key)
+    if len(ordered) <= len(ESPN_CONTINENTAL_LEAGUES):
+        log("espn_mirror: league discovery unavailable [BLOCKED_BY_WAF?] "
+            "-> using continental+major fallback set")
+        ordered += ["eng.1", "esp.1", "ita.1", "ger.1", "fra.1",
+                    "uefa.champions", "uefa.europa", "ksa.1"]
+    _espn_leagues_cache = ordered[:28]
     return _espn_leagues_cache
 
 
 def scrape_espn_mirror(tokens: List[str], sport: str) -> Tuple[List[Dict[str, Any]], str]:
     """Not a scraping target per se, but a real, keyless price feed used to
     guarantee multi-book handles for the quant layer. Same integrity rule:
-    only prices actually present in the JSON become rows."""
+    only prices actually present in the JSON become rows.
+
+    Failure modes are reported distinctly (never collapsed into 'empty'):
+      blocked_waf        -- ESPN refused us (header/IP fingerprinting)
+      timeout            -- board fetch exceeded SOURCE_TIMEOUT_S
+      no_fixture         -- boards fetched fine, match not listed anywhere
+      fixture_no_odds    -- fixture located but bookmaker lines absent/expired
+      ok                 -- genuine prices harvested"""
     if sport not in ("soccer", "auto"):
         return [], "skipped"
     rows: List[Dict[str, Any]] = []
     hit = False
+    saw_blocked = saw_timeout = False
     for league in espn_soccer_leagues():
-        url = f"{_ESPN_BASE}/{league}/scoreboard"
-        resp = http_get(url + "?limit=100")
+        url = f"{_ESPN_BASE}/{league}/scoreboard?limit=100"
+        try:
+            resp = http_get(url, headers=JSON_HEADERS, strict=True)
+        except FetchError as fe:
+            if fe.kind == "blocked_waf":
+                saw_blocked = True
+            elif fe.kind == "timeout":
+                saw_timeout = True
+            continue
         if resp is None:
             continue
         try:
@@ -445,8 +588,8 @@ def scrape_espn_mirror(tokens: List[str], sport: str) -> Tuple[List[Dict[str, An
         except Exception:
             continue
         for ev in events:
-            name = f"{ev.get('name', '')} {ev.get('shortName', '')}"
-            competitors = ev.get("competitions", [{}])[0]
+            name = (f"{ev.get('name', '')} {ev.get('shortName', '')}").lower()
+            competitors = (ev.get("competitions") or [{}])[0]
             for team in competitors.get("competitors", []):
                 name += " " + str(team.get("team", {}).get("displayName", ""))
             if not matches_query(name, tokens):
@@ -455,42 +598,124 @@ def scrape_espn_mirror(tokens: List[str], sport: str) -> Tuple[List[Dict[str, An
             rows.extend(_espn_event_rows(ev))
         if hit:
             break
-    return (rows, "ok") if rows else ([], "empty" if hit else "no_fixture")
+    if rows:
+        return rows, "ok"
+    if hit:
+        return [], "fixture_no_odds"
+    if saw_blocked and not saw_timeout:
+        return [], "blocked_waf"
+    if saw_timeout:
+        return [], "timeout"
+    return [], "no_fixture"
+
+
+def _as_american(v: Any) -> Optional[float]:
+    """ESPN betting payloads mix floats (-360) with strings ('+135')."""
+    try:
+        f = float(str(v).replace("+", ""))
+    except (TypeError, ValueError):
+        return None
+    return f
+
+
+def _line_float(v: Any) -> Optional[float]:
+    m = re.search(r"-?\d+(?:\.\d+)?", str(v if v is not None else ""))
+    return float(m.group(0)) if m else None
 
 
 def _espn_event_rows(ev: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Harvest every REAL price from an ESPN scoreboard event.
+
+    Two payload shapes exist in the wild and both are handled:
+      * legacy flat keys: homeOpeningMoneyLine / overOpeningPrice / ...
+      * current nested objects: moneyline.home.close.odds = "-360",
+        total.over.close.{line,odds}, pointSpread.home.close.{line,odds},
+        drawOdds.moneyLine  (verified live on uefa.champions boards; the old
+        flat-key reader found ZERO prices there -- root cause of silent
+        single-source hunts even when ESPN answered 200)."""
     rows: List[Dict[str, Any]] = []
     comp = (ev.get("competitions") or [{}])[0]
-    for odd in comp.get("odds", []):
-        provider = (odd.get("provider", {}) or {}).get("name", "ESPN-Mirror")
-        details = _norm_ws(odd.get("details", ""))
-        ml_home = odd.get("homeOpeningMoneyLine") or odd.get("homeMoneyLine")
-        ml_away = odd.get("awayOpeningMoneyLine") or odd.get("awayMoneyLine")
-        draw = odd.get("drawMoneyLine")
-        if ml_home:
-            rows.extend(_american_pair(provider, "Home", ml_home))
-        if ml_away:
-            rows.extend(_american_pair(provider, "Away", ml_away))
-        if draw:
-            rows.extend(_american_pair(provider, "Draw", draw))
-        m = re.search(r"(\d+(?:\.\d+)?)", details)
-        total_line = float(m.group(1)) if m else None
-        ov_price = odd.get("overOpeningPrice") or odd.get("overCurrentPrice")
-        un_price = odd.get("underOpeningPrice") or odd.get("underCurrentPrice")
-        if total_line and ov_price:
+    for odd in comp.get("odds") or []:
+        if not isinstance(odd, dict):
+            continue   # ESPN emits `odds:[null]` once lines expire
+        provider = (odd.get("provider") or {}).get("name", "ESPN-Mirror")
+        details = _norm_ws(str(odd.get("details") or ""))
+
+        ml = odd.get("moneyline") or {}
+        home_ml = (_as_american(((ml.get("home") or {}).get("close") or {})
+                                .get("odds"))
+                   or _as_american(((ml.get("home") or {}).get("open") or {})
+                                   .get("odds")))
+        away_ml = (_as_american(((ml.get("away") or {}).get("close") or {})
+                                .get("odds"))
+                   or _as_american(((ml.get("away") or {}).get("open") or {})
+                                   .get("odds")))
+        draw_ml = _as_american((odd.get("drawOdds") or {}).get("moneyLine"))
+        # legacy flat keys still honoured when present
+        home_ml = home_ml or _as_american(odd.get("homeOpeningMoneyLine")
+                                          or odd.get("homeMoneyLine"))
+        away_ml = away_ml or _as_american(odd.get("awayOpeningMoneyLine")
+                                          or odd.get("awayMoneyLine"))
+        draw_ml = draw_ml or _as_american(odd.get("drawMoneyLine"))
+        if home_ml:
+            rows.extend(_american_pair(provider, "Home", home_ml))
+        if away_ml:
+            rows.extend(_american_pair(provider, "Away", away_ml))
+        if draw_ml:
+            rows.extend(_american_pair(provider, "Draw", draw_ml))
+
+        tot = odd.get("total") or {}
+        line = _line_float(tot.get("over", {}).get("close", {})
+                           .get("line") if isinstance(tot.get("over"), dict)
+                           else None) \
+            or _line_float((tot.get("under") or {}).get("close", {})
+                           .get("line") if isinstance(tot.get("under"), dict)
+                           else None) \
+            or _as_american(odd.get("overUnder"))
+        ov = _as_american(((tot.get("over") or {}).get("close") or {})
+                          .get("odds")) \
+            or _as_american(((tot.get("over") or {}).get("open") or {})
+                            .get("odds")) \
+            or _as_american(odd.get("overOpeningPrice")
+                            or odd.get("overCurrentPrice"))
+        un = _as_american(((tot.get("under") or {}).get("close") or {})
+                          .get("odds")) \
+            or _as_american(((tot.get("under") or {}).get("open") or {})
+                            .get("odds")) \
+            or _as_american(odd.get("underOpeningPrice")
+                            or odd.get("underCurrentPrice"))
+        if line and ov:
             rows.append({"source": provider, "market": "total",
-                         "name": "Over/Under Goals", "selection": f"Over {total_line}",
-                         "line": total_line, "odds": _to_decimal(ov_price)})
-        if total_line and un_price:
+                         "name": "Over/Under Goals",
+                         "selection": f"Over {line}", "line": line,
+                         "odds": _to_decimal(ov)})
+        if line and un:
             rows.append({"source": provider, "market": "total",
-                         "name": "Over/Under Goals", "selection": f"Under {total_line}",
-                         "line": total_line, "odds": _to_decimal(un_price)})
-        ah = odd.get("homeOpeningAgainstTheSpreadOdds")
-        ah_line = odd.get("againstTheSpreadOpeningLine")
-        if ah and ah_line is not None:
-            rows.extend(_american_pair(provider, f"Home {ah_line}", ah,
-                                       market="spread", name="Asian Handicap",
-                                       line=float(ah_line)))
+                         "name": "Over/Under Goals",
+                         "selection": f"Under {line}", "line": line,
+                         "odds": _to_decimal(un)})
+
+        ps = odd.get("pointSpread") or {}
+        for side, label in (("home", "Home"), ("away", "Away")):
+            close = (ps.get(side) or {}).get("close") or {}
+            opne = (ps.get(side) or {}).get("open") or {}
+            ah = _as_american(close.get("odds")) or _as_american(opne.get("odds"))
+            ah_line = _line_float(close.get("line")) \
+                or _line_float(opne.get("line"))
+            if ah and ah_line is not None:
+                rows.extend(_american_pair(
+                    provider, f"{label} {ah_line}", ah,
+                    market="spread", name="Asian Handicap", line=ah_line))
+        # last-ditch legacy AH keys
+        ah_legacy = _as_american(odd.get("homeOpeningAgainstTheSpreadOdds"))
+        ah_line_legacy = _as_american(odd.get("againstTheSpreadOpeningLine"))
+        if ah_legacy and ah_line_legacy is not None and \
+                not any(r["market"] == "spread" for r in rows):
+            rows.extend(_american_pair(provider,
+                                       f"Home {ah_line_legacy}", ah_legacy,
+                                       market="spread",
+                                       name="Asian Handicap",
+                                       line=float(ah_line_legacy)))
     return [r for r in rows if r.get("odds") and r["odds"] > 1.0]
 
 
