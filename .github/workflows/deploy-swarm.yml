@@ -31,45 +31,27 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Install Dependencies
+      - name: Execute Slate Scan (stdlib only, always writes universe file)
         run: |
-          pip install --upgrade pip
-          pip install aiohttp matplotlib numpy pandas requests beautifulsoup4 python-dotenv groq google-genai pydantic jsonschema
-
-      - name: Execute Hunter Swarm (Input-Free Slate Scan)
-        env:
-          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
-        run: |
-          echo "Launching scheduled swarm across today+tomorrow slate..."
-          # CRITICAL FIX: Ensure output goes EXACTLY where frontend expects
           mkdir -p data
-          python scripts/swarm_runner.py scan-slate || {
-            echo "ERROR: scan-slate failed or produced no output."
-            exit 1
-          }
-          
+          python scripts/slate_scan.py
           if [ ! -f data/market_universe.json ]; then
-            echo "FATAL: market_universe.json missing after scan attempt."
-            ls -laR data/
-            exit 1
+            echo "FATAL: universe file missing"; exit 1
           fi
-          
-          SIZE=$(stat -c%s data/market_universe.json)
-          echo "Swarm complete. Universe size: $SIZE bytes at data/market_universe.json"
+          echo "Universe size: $(stat -c%s data/market_universe.json) bytes"
 
       - name: Upload Hunt Output Artifact
         uses: actions/upload-artifact@v4
         with:
           name: hunt-output
-          path: data/market_universe.json  # ONLY upload the critical file
+          path: data/
           retention-days: 7
 
   commit-results:
     needs: scan-universe
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Repository on main branch
+      - name: Checkout main
         uses: actions/checkout@v4
         with:
           ref: main
@@ -85,15 +67,12 @@ jobs:
         run: |
           git config user.name "Stratum Bot"
           git config user.email "bot@stratum.ai"
-          git checkout main
-          git pull origin main --rebase || true  # Safe sync before push
-          git add data/market_universe.json     # Stage ONLY the universe file
+          git add data/market_universe.json data/hunt_status.json
           if ! git diff --staged --quiet; then
-            echo "Changes detected. Creating commit..."
             git commit -m "swarm: universe scan @ $(date -u +%FT%TZ)"
-            git push origin main
+            git push origin HEAD:refs/heads/main
           else
-            echo "No changes detected. Skipping push."
+            echo "No changes. Skipping push."
           fi
 
   build-deploy-pwa:
@@ -103,7 +82,7 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - name: Checkout Latest Code
+      - name: Checkout main
         uses: actions/checkout@v4
         with:
           ref: main
@@ -116,7 +95,7 @@ jobs:
       - name: Build Frontend
         working-directory: ./app
         run: |
-          npm ci --prefer-offline --no-audit --fund=false
+          npm install --prefer-offline --no-audit --fund=false
           npm run build
 
       - name: Configure GitHub Pages
