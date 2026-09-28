@@ -42,20 +42,27 @@ jobs:
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
         run: |
           echo "Launching scheduled swarm across today+tomorrow slate..."
-          python scripts/swarm_runner.py scan-slate
-
+          # CRITICAL FIX: Ensure output goes EXACTLY where frontend expects
+          mkdir -p data
+          python scripts/swarm_runner.py scan-slate || {
+            echo "ERROR: scan-slate failed or produced no output."
+            exit 1
+          }
+          
           if [ ! -f data/market_universe.json ]; then
-            echo "ERROR: market_universe.json was not created."
+            echo "FATAL: market_universe.json missing after scan attempt."
+            ls -laR data/
             exit 1
           fi
+          
           SIZE=$(stat -c%s data/market_universe.json)
-          echo "Swarm complete. Universe size: $SIZE bytes"
+          echo "Swarm complete. Universe size: $SIZE bytes at data/market_universe.json"
 
       - name: Upload Hunt Output Artifact
         uses: actions/upload-artifact@v4
         with:
           name: hunt-output
-          path: data/
+          path: data/market_universe.json  # ONLY upload the critical file
           retention-days: 7
 
   commit-results:
@@ -79,8 +86,8 @@ jobs:
           git config user.name "Stratum Bot"
           git config user.email "bot@stratum.ai"
           git checkout main
-          git pull origin main
-          git add data/
+          git pull origin main --rebase || true  # Safe sync before push
+          git add data/market_universe.json     # Stage ONLY the universe file
           if ! git diff --staged --quiet; then
             echo "Changes detected. Creating commit..."
             git commit -m "swarm: universe scan @ $(date -u +%FT%TZ)"
