@@ -98,9 +98,17 @@ def markets_for_comp(comp):
     odds_list = comp.get("odds") or []
     provs = []
     for o in odds_list:
+        if not isinstance(o, dict):      # ARMOR: skip null/garbage odds entries
+            continue
         h = o.get("homeTeamOdds") or {}
         a = o.get("awayTeamOdds") or {}
         d = o.get("drawOdds") or {}
+        if not isinstance(h, dict):
+            h = {}
+        if not isinstance(a, dict):
+            a = {}
+        if not isinstance(d, dict):
+            d = {}
         provs.append({
             "home_ml": am_to_dec(h.get("moneyLine")),
             "away_ml": am_to_dec(a.get("moneyLine")),
@@ -124,7 +132,7 @@ def markets_for_comp(comp):
     if sp_prov:
         line = sp_prov[0]["spread"]
         try:
-            line_s = f"{line:+.1f}" if float(line) > 0 else f"{float(line):.1f}"
+            line_s = f"{float(line):+.1f}"
         except Exception:
             line_s = str(line)
         add_rows(rows, f"Spread / Handicap ({line_s})",
@@ -140,37 +148,45 @@ def markets_for_comp(comp):
 
 
 def parse_event(ev, sport, league):
-    comps = ev.get("competitions") or []
-    if not comps:
+    try:                                   # ARMOR: one corrupt match can never kill the scan
+        if not isinstance(ev, dict):
+            return None
+        comps = ev.get("competitions") or []
+        comp = comps[0] if comps else None
+        if not isinstance(comp, dict):
+            return None
+        home = away = "?"
+        for c in (comp.get("competitors") or []):
+            if not isinstance(c, dict):
+                continue
+            name = ((c.get("team") or {}) or {}).get("displayName") or "?"
+            if c.get("homeAway") == "home":
+                home = name
+            else:
+                away = name
+        rows = markets_for_comp(comp)
+        if not rows:
+            return None
+        rows.sort(key=lambda r: r["confidence_score"], reverse=True)
+        ts = int(time.time())
+        return {
+            "fixture_id": str(ev.get("id") or f"{home}-{away}"),
+            "home": home,
+            "away": away,
+            "sport": sport,
+            "league": league,
+            "kickoff_utc": ev.get("date") or "",
+            "markets_scanned": len(rows),
+            "top_edges": rows[:12],
+            "visual_reports_png": [],
+            "agent_trace_lines": [
+                {"agent": "SCOUT", "text": f"parsed {home} vs {away} ({league}): {len(rows)} market lines", "ts": ts},
+                {"agent": "ACTUARY", "text": f"de-vigged {len(rows)} lines; ranked by consensus hit probability", "ts": ts},
+            ],
+        }
+    except Exception as e:
+        print(f"[SCOUT] skipped corrupt event: {type(e).__name__}: {e}")
         return None
-    comp = comps[0]
-    home = away = "?"
-    for c in comp.get("competitors") or []:
-        name = ((c.get("team") or {}).get("displayName")) or "?"
-        if c.get("homeAway") == "home":
-            home = name
-        else:
-            away = name
-    rows = markets_for_comp(comp)
-    if not rows:
-        return None
-    rows.sort(key=lambda r: r["confidence_score"], reverse=True)
-    ts = int(time.time())
-    return {
-        "fixture_id": str(ev.get("id") or f"{home}-{away}"),
-        "home": home,
-        "away": away,
-        "sport": sport,
-        "league": league,
-        "kickoff_utc": ev.get("date") or "",
-        "markets_scanned": len(rows),
-        "top_edges": rows[:12],
-        "visual_reports_png": [],
-        "agent_trace_lines": [
-            {"agent": "SCOUT", "text": f"parsed {home} vs {away} ({league}): {len(rows)} market lines", "ts": ts},
-            {"agent": "ACTUARY", "text": f"de-vigged {len(rows)} lines; ranked by consensus hit probability", "ts": ts},
-        ],
-    }
 
 
 def main():
@@ -179,7 +195,7 @@ def main():
     fixtures = []
     sources = {}
     now = dt.datetime.now(dt.timezone.utc)
-    dates = [(now + dt.timedelta(days=i)).strftime("%Y%m%d") for i in range(2)]
+    dates = [(now + dt.timedelta(days=i)).strftime("%Y%m%d") for i in range(3)]
     for sport_path, leagues in LEAGUES.items():
         for lg in leagues:
             n_ev = 0
@@ -200,7 +216,7 @@ def main():
                 if events:
                     status = "ok"
             sources[f"{sport_path}/{lg}"] = f"ok({n_ev})" if status == "ok" else status
-            lines.append({"agent": "SCOUT", "text": f"{sport_path}/{lg}: {status}, fixtures_with_odds={n_ev}", "ts": int(time.time())})
+            lines.append({"agent": "SCOUT", "text": f"{sport_path}/{lg}: {sources[f'{sport_path}/{lg}']}", "ts": int(time.time())})
             print(f"[SCOUT] {sport_path}/{lg} -> {sources[f'{sport_path}/{lg}']}")
     lines.append({"agent": "STRATEGIST", "text": f"universe assembled: {len(fixtures)} fixtures", "ts": int(time.time())})
     universe = {
