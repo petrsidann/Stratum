@@ -1,9 +1,9 @@
 {
-  "hunt_id": "hmumo08u9groh4",
+  "hunt_id": "hmumxlsycjhgeq",
   "status": "no_results",
   "stage": "DONE",
   "progress": 1.0,
-  "generated_at_utc": "2026-09-29T12:41:27.982790+00:00",
+  "generated_at_utc": "2026-09-29T17:10:07.577459+00:00",
   "fixtures": [],
   "sources_status": {
     "soccer/eng.1": "no_fixture_in_board",
@@ -69,7 +69,7 @@
       "Australia vs Brazil",
       "Russia vs Iran"
     ],
-    "error_message": "No match today containing 'czechia vs croatia'. Teams playing today: see list."
+    "error_message": "No match today containing 'croatia vs spain'. Teams playing today: see list."
   },
-  "error_message": "No match today containing 'czechia vs croatia'. Teams playing today: see list."
+  "error_message": "No match today containing 'croatia vs spain'. Teams playing today: see list."
 }
