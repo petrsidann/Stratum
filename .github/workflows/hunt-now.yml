@@ -25,7 +25,7 @@ on:
         default: soccer
 
 permissions:
-  contents: read
+  contents: write    # hunt results are committed back to main for the PWA poller
 
 concurrency:
   group: hunt-now
@@ -58,6 +58,51 @@ jobs:
             --output hunt-result.json
           echo "--- hunt-result.json (head) ---"
           head -c 2000 hunt-result.json || true
+
+      - name: Stage committed artifacts (data/hunts/ queue layout)
+        if: always()
+        env:
+          HUNT_STAGE: '1'             # opt-in mirroring inside hunter_api.py
+          HUNT_ID: 'gha-${{ github.run_id }}-${{ github.run_attempt }}'
+        run: |
+          # Re-emit the already-written hunt-result.json into the PWA-readable
+          # queue layout (data/hunts/<stamp>/hunt_result.json + latest.json
+          # pointer). If the scan itself produced no file, publish an honest
+          # error pointer instead so pollers terminate quickly.
+          if [ -f hunt-result.json ]; then
+            python scripts/publish_hunt_artifacts.py hunt-result.json
+          else
+            mkdir -p data/hunts
+            python3 - <<'PY'
+          import json, datetime
+          pointer = {
+              "hunt_id": "gha-${{ github.run_id }}-${{ github.run_attempt }}",
+              "status": "error",
+              "stage": "runner_failure",
+              "progress": 1.0,
+              "updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+              "result_path": "",
+          }
+          with open("data/hunts/latest.json", "w") as fh:
+              json.dump(pointer, fh, indent=2)
+          PY
+          fi
+
+      - name: Commit hunt artifacts to main
+        if: always()
+        run: |
+          git config user.name "Stratum Bot"
+          git config user.email "bot@stratum.ai"
+          git add data/hunts || true
+          if ! git diff --staged --quiet; then
+            git commit -m "hunt: ${{ inputs.match_query }} @ $(date -u +%FT%TZ)"
+            for attempt in 1 2 3; do
+              git pull --rebase origin main && break || sleep $((attempt * 3))
+            done
+            git push origin HEAD:refs/heads/main
+          else
+            echo "No hunt artifacts to commit."
+          fi
 
       - name: Upload Hunt Result Artifact
         if: always()
