@@ -1,4 +1,8 @@
-# Compiled and build artifacts
+# Python compiled files
 __pycache__/
 *.pyc
-dist/
+
+# Environment and secrets
+.env
+.env.local
+*.env.*

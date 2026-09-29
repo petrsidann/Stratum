@@ -1,0 +1,253 @@
+Sport,Betting Market
+Football / Soccer,Full-Time Result (1X2)
+Football / Soccer,Double Chance
+Football / Soccer,Draw No Bet
+Football / Soccer,Both Teams to Score (BTTS)
+Football / Soccer,"Over/Under Total Goals (0.5, 1.5, 2.5, 3.5, 4.5, 5.5)"
+Football / Soccer,Asian Handicap
+Football / Soccer,European Handicap
+Football / Soccer,Correct Score
+Football / Soccer,Half-Time/Full-Time
+Football / Soccer,1st Half Result
+Football / Soccer,2nd Half Result
+Football / Soccer,1st Half Over/Under Total Goals
+Football / Soccer,2nd Half Over/Under Total Goals
+Football / Soccer,Exact Total Goals
+Football / Soccer,"Multi-Goals (Bands e.g., 1-2, 2-3, 4-6)"
+Football / Soccer,Winning Margin
+Football / Soccer,To Win to Nil
+Football / Soccer,To Win From Behind
+Football / Soccer,Clean Sheet (Home/Away)
+Football / Soccer,Team Total Goals (Over/Under)
+Football / Soccer,First Goalscorer
+Football / Soccer,Last Goalscorer
+Football / Soccer,Anytime Goalscorer
+Football / Soccer,Player to Score 2+ Goals / Hat-trick
+Football / Soccer,Player to Assist
+Football / Soccer,Player To Be Carded
+Football / Soccer,Player Total Shots / Shots on Target
+Football / Soccer,Player Total Passes
+Football / Soccer,Player Total Tackles
+Football / Soccer,Total Match Corners (Over/Under)
+Football / Soccer,Team Total Corners
+Football / Soccer,1st Half Corners
+Football / Soccer,Race to X Corners
+Football / Soccer,Total Match Cards / Booking Points
+Football / Soccer,Team Total Cards
+Football / Soccer,Red Card in Match (Yes/No)
+Football / Soccer,Penalty Awarded (Yes/No)
+Football / Soccer,Own Goal (Yes/No)
+Football / Soccer,"Method of Next Goal (Shot, Header, Penalty, Free Kick)"
+Football / Soccer,Result after 15/30/60 Minutes
+Football / Soccer,Highest Scoring Half
+Football / Soccer,Both Teams to Score in Both Halves
+Football / Soccer,Team to Score in Both Halves
+Football / Soccer,Injury Time Goals
+Basketball,Moneyline (Match Winner)
+Basketball,Point Spread (Handicap)
+Basketball,Total Points (Over/Under)
+Basketball,1st Half Moneyline
+Basketball,1st Half Point Spread
+Basketball,1st Half Total Points
+Basketball,1st Quarter / 2nd Quarter / 3rd Quarter / 4th Quarter Winner
+Basketball,Quarter Point Spread
+Basketball,Quarter Total Points
+Basketball,Alternative Spreads
+Basketball,Alternative Totals
+Basketball,Team Total Points (Over/Under)
+Basketball,Winning Margin Brackets
+Basketball,Race to 10/20/50 Points
+Basketball,Will There Be Overtime? (Yes/No)
+Basketball,Highest Scoring Quarter / Half
+Basketball,Player Performance Player Props (Points + Rebounds + Assists)
+Basketball,Player Total Points (Over/Under)
+Basketball,Player Total Rebounds (Over/Under)
+Basketball,Player Total Assists (Over/Under)
+Basketball,Player Total Threes Made (Over/Under)
+Basketball,Player Total Blocks (Over/Under)
+Basketball,Player Total Steals (Over/Under)
+Basketball,Player To Record a Double-Double / Triple-Double
+Basketball,First Basket Scorer
+Basketball,Team to Score First Points
+Basketball,Double Result (Half-Time/Full-Time)
+Tennis,Match Winner (Moneyline)
+Tennis,Set Handicap
+Tennis,Game Handicap
+Tennis,Total Match Games (Over/Under)
+Tennis,Set 1 Winner
+Tennis,Set 2 Winner
+Tennis,Set 1 Score / Correct Score
+Tennis,Set 2 Score / Correct Score
+Tennis,Total Games in Set 1 (Over/Under)
+Tennis,Will There Be a Tie-Break? (Yes/No)
+Tennis,Any Set to Score 6-0 or 0-6
+Tennis,To Win a Set (Yes/No)
+Tennis,"Total Match Sets (Over/Under - e.g., Over 2.5 or 3.5)"
+Tennis,Player Total Games (Over/Under)
+Tennis,"Correct Set Score (e.g., 2-0, 2-1, 3-0)"
+Tennis,Match Winner & Both Players to Win a Set
+Tennis,First Break of Serve
+Tennis,Total Aces (Over/Under)
+Tennis,Total Double Faults (Over/Under)
+Tennis,Player Total Aces
+Tennis,Most Aces in Match
+Tennis,Live Point Betting (Point X Winner in Game Y)
+American Football (NFL/CFL),Moneyline (Game Winner)
+American Football (NFL/CFL),Point Spread (Handicap)
+American Football (NFL/CFL),Total Points Over/Under (Game Lines)
+American Football (NFL/CFL),1st Half Moneyline
+American Football (NFL/CFL),1st Half Point Spread
+American Football (NFL/CFL),1st Half Total Points
+American Football (NFL/CFL),"Quarter Betting (1st, 2nd, 3rd, 4th Winner/Spread/Total)"
+American Football (NFL/CFL),Alternative Point Spreads
+American Football (NFL/CFL),Alternative Total Points
+American Football (NFL/CFL),Team Total Points (Over/Under)
+American Football (NFL/CFL),Winning Margin (Exact or Band)
+American Football (NFL/CFL),Highest Scoring Half / Quarter
+American Football (NFL/CFL),First Team to Score
+American Football (NFL/CFL),Last Team to Score
+American Football (NFL/CFL),"First Score Type (Touchdown, Field Goal, Safety)"
+American Football (NFL/CFL),Total Match Touchdowns
+American Football (NFL/CFL),Total Match Field Goals
+American Football (NFL/CFL),Both Teams to Score X Points
+American Football (NFL/CFL),Will There Be Overtime?
+American Football (NFL/CFL),Player Passing Yards (Over/Under)
+American Football (NFL/CFL),Player Passing Touchdowns (Over/Under)
+American Football (NFL/CFL),Player Rushing Yards (Over/Under)
+American Football (NFL/CFL),Player Receiving Yards (Over/Under)
+American Football (NFL/CFL),Player Receptions (Over/Under)
+American Football (NFL/CFL),Anytime Touchdown Scorer
+American Football (NFL/CFL),First Touchdown Scorer
+American Football (NFL/CFL),Last Touchdown Scorer
+American Football (NFL/CFL),Player To Score 2+ Touchdowns
+American Football (NFL/CFL),Player Interceptions Thrown
+American Football (NFL/CFL),Player Total Tackles / Assists
+American Football (NFL/CFL),Team Defensive Sacks
+Cricket,Match Winner
+Cricket,Tied Match (Yes/No)
+Cricket,Top Team Batsman (Run Scorer)
+Cricket,Top Team Bowler (Wicket Taker)
+Cricket,Man of the Match
+Cricket,Team Innings Runs (Over/Under)
+Cricket,1st Over Total Runs (Over/Under)
+Cricket,Highest Opening Partnership
+Cricket,Most Match Sixes
+Cricket,Most Match Fours
+Cricket,Total Match Sixes
+Cricket,Total Match Fours
+Cricket,Team to Score Most Sixes
+Cricket,Player Total Runs (Over/Under Props)
+Cricket,Player To Score 50 / 100 Runs (Yes/No)
+Cricket,"Method of Dismissal (Caught, Bowled, LBW, Run Out, Stumped)"
+Cricket,Fall of 1st Wicket Runs
+Cricket,Batter Match-ups (Player X vs Player Y Runs)
+Cricket,Total Match Wickets
+Cricket,Total Match Wides / Extras
+Cricket,1st Innings Lead
+Ice Hockey,Moneyline (Inc. Overtime/Shootout)
+Ice Hockey,Puck Line / Handicap (3-Way or 2-Way)
+Ice Hockey,Total Goals Over/Under
+Ice Hockey,60-Minute Result (1X2 Regulation Time)
+Ice Hockey,"Period Betting (1st, 2nd, 3rd Winner/Puck Line/Total)"
+Ice Hockey,Both Teams to Score (Yes/No)
+Ice Hockey,Team Total Goals (Over/Under)
+Ice Hockey,Alternative Puck Lines / Totals
+Ice Hockey,Correct Score (Regulation or Final)
+Ice Hockey,Winning Margin
+Ice Hockey,First Team to Score
+Ice Hockey,Last Team to Score
+Ice Hockey,Highest Scoring Period
+Ice Hockey,Will There Be Overtime/Shootout?
+Ice Hockey,Race to X Goals
+Ice Hockey,Player Anytime Goalscorer
+Ice Hockey,Player First Goalscorer
+Ice Hockey,Player Total Points / Assists / Shots on Goal
+Ice Hockey,Goalie Total Saves Over/Under
+Ice Hockey,Grand Salami (Total Goals Across All Daily Games)
+Baseball (MLB),Moneyline (Game Winner)
+Baseball (MLB),Run Line / Handicap (-1.5 / +1.5)
+Baseball (MLB),Total Runs (Over/Under)
+Baseball (MLB),5-Innings Moneyline (1st Half Winner)
+Baseball (MLB),5-Innings Run Line
+Baseball (MLB),5-Innings Total Runs
+Baseball (MLB),Team Total Runs (Over/Under)
+Baseball (MLB),Alternative Run Lines
+Baseball (MLB),Alternative Totals
+Baseball (MLB),Inning 1 Winner / Run Scored in 1st Inning (Yes/No)
+Baseball (MLB),Highest Scoring Inning
+Baseball (MLB),Winning Margin Brackets
+Baseball (MLB),Correct Score
+Baseball (MLB),Total Hits + Runs + Errors
+Baseball (MLB),Total Match Hits (Over/Under)
+Baseball (MLB),Player Total Strikeouts (Over/Under Prop)
+Baseball (MLB),Player Total Hits / Total Bases
+Baseball (MLB),Player To Hit A Home Run (Anytime)
+Baseball (MLB),Player RBI (Runs Batted In)
+Baseball (MLB),Player Performance Matchups
+Combat Sports (MMA/Boxing),Fight Winner (Moneyline)
+Combat Sports (MMA/Boxing),"Method of Victory (KO/TKO, Submission, Decision/Technical Decision, Draw)"
+Combat Sports (MMA/Boxing),Round Betting (Exact Round Fight Ends)
+Combat Sports (MMA/Boxing),"Total Rounds (Over/Under lines e.g., 1.5, 2.5)"
+Combat Sports (MMA/Boxing),Fight to Go the Distance? (Yes/No)
+Combat Sports (MMA/Boxing),"Alternative Round Betting (Groups of Rounds e.g., 1-3, 4-6)"
+Combat Sports (MMA/Boxing),Fighter to Win by Unanimous / Split / Majority Decision
+Combat Sports (MMA/Boxing),Fighter to Score a Knockdown
+Combat Sports (MMA/Boxing),Time of Stoppage / Exact Minute Fight Ends
+Golf,Tournament Outright Winner
+Golf,Top 5 / Top 10 / Top 20 Finish
+Golf,First Round Leader
+Golf,72-Hole Match Bets (Player X vs Player Y)
+Golf,3-Ball Betting (Group Winner per Round)
+Golf,2-Ball Betting (Head-to-Head per Round)
+Golf,To Make the Cut / To Miss the Cut
+Golf,Winning Margin (Number of Strokes)
+Golf,"Top Nationality (Top American, Top European, etc.)"
+Golf,Will There Be a Hole-in-One? (Yes/No)
+Golf,Winner Without Favorite
+Golf,Leader After Round 2 / Round 3
+Motorsports (F1/NASCAR/MotoGP),Race Winner Outright
+Motorsports (F1/NASCAR/MotoGP),Podium Finish (Top 3)
+Motorsports (F1/NASCAR/MotoGP),Top 6 / Top 10 Finish
+Motorsports (F1/NASCAR/MotoGP),Pole Position (Qualifying Winner)
+Motorsports (F1/NASCAR/MotoGP),Fastest Lap Award
+Motorsports (F1/NASCAR/MotoGP),Winning Car / Constructor
+Motorsports (F1/NASCAR/MotoGP),Driver Head-to-Head Matchups (Driver A vs Driver B)
+Motorsports (F1/NASCAR/MotoGP),Number of Classified Finishers
+Motorsports (F1/NASCAR/MotoGP),Will There Be a Safety Car? (Yes/No)
+Motorsports (F1/NASCAR/MotoGP),Winning Margin (Seconds Bracket)
+Motorsports (F1/NASCAR/MotoGP),First Driver to Retire / DNF
+Rugby League / Rugby Union,Match Result (1X2)
+Rugby League / Rugby Union,Handicap Betting (Point Spread)
+Rugby League / Rugby Union,Total Match Points (Over/Under)
+Rugby League / Rugby Union,Alternative Handicaps
+Rugby League / Rugby Union,Alternative Total Points
+Rugby League / Rugby Union,Half-Time/Full-Time Result
+Rugby League / Rugby Union,Winning Margin Brackets
+Rugby League / Rugby Union,First Try Scorer
+Rugby League / Rugby Union,Last Try Scorer
+Rugby League / Rugby Union,Anytime Try Scorer
+Rugby League / Rugby Union,Team Total Tries / Points
+Rugby League / Rugby Union,"First Scoring Play (Try, Penalty, Drop Goal)"
+Rugby League / Rugby Union,Highest Scoring Half
+Rugby League / Rugby Union,Race to X Points
+Rugby League / Rugby Union,Will There Be a Red Card / Sin Bin?
+Esports,Match Winner (Moneyline)
+Esports,Map Handicap
+Esports,Total Maps Played (Over/Under)
+Esports,"Correct Map Score (e.g., 2-0, 2-1)"
+Esports,Map 1 Winner / Map 2 Winner
+Esports,First Blood / First Kill (Map Specific)
+Esports,First to 5/10 Kills
+Esports,Total Kills Over/Under
+Esports,Map Duration (Minutes Over/Under)
+Esports,"Team to Destroy Next Objective (Tower, Baron, Roshan, Bomb Plant)"
+Darts,Match Winner
+Darts,Most 180s in Match
+Darts,Total 180s Over/Under
+Darts,Handicap 180s
+Darts,Leg Handicap / Set Handicap
+Darts,Total Match Legs / Sets
+Darts,Correct Score (Sets/Legs)
+Darts,Highest Match Checkout (Over/Under)
+Darts,Player Total 180s
+Darts,9-Dart Finish in Match (Yes/No)

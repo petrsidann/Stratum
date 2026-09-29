@@ -9,6 +9,26 @@ TK = os.environ.get("GITHUB_TOKEN", "")
 API = f"https://api.github.com/repos/{REPO}"
 CHANNEL_TITLE = "STRATUM_HUNT_CHANNEL"
 
+# QUANT BRAIN: the repo's src/ modules (model_poisson, context_llm) are stdlib-only.
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src"))
+try:
+    import model_poisson          # Dixon-Coles-lite pricer
+    import context_llm            # guarded one-call-per-fixture adjuster
+    QUANT_OK = True
+except Exception as _qe:          # never break the hunt if imports fail
+    model_poisson = context_llm = None
+    QUANT_OK = False
+IS_SOCCER = {"soccer", "football_soccer"}
+
+# QUANT BRAIN: football taxonomy rows (owner CSV) for coverage accounting
+TAX_FOOTBALL = set()
+if QUANT_OK:
+    try:
+        _, _tax_rows = model_poisson.load_taxonomy()
+        TAX_FOOTBALL = {m for (s, m) in _tax_rows if s.lower().startswith("football")}
+    except Exception:
+        TAX_FOOTBALL = set()
+
 LEAGUES = {
     "soccer": ["eng.1", "esp.1", "ita.1", "ger.1", "fra.1", "usa.1",
                "uefa.champions", "uefa.europa", "uefa.nations", "fifa.world", "fifa.friendly"],
@@ -264,6 +284,148 @@ def tokens_of(q):
     return [t for t in re.split(r"[^a-z0-9]+", q.lower()) if t and t not in ("vs", "v", "the", "and")]
 
 
+def _tax_name(book_market):
+    """Map a book market name to its taxonomy row (owner CSV), or None."""
+    if not TAX_FOOTBALL:
+        return None
+    bm = (book_market or "").lower()
+    if "1x2" in bm or "winner" in bm or "result" in bm and "half" not in bm \
+            and "first" not in bm and "last" not in bm:
+        return "Full-Time Result (1X2)"
+    if "over/under" in bm or "total" in bm and ("over" in bm or "under" in bm or "/under" in bm):
+        return "Over/Under Total Goals (0.5, 1.5, 2.5, 3.5, 4.5, 5.5)"
+    if "spread" in bm or "handicap" in bm:
+        return "Asian Handicap"
+    return None
+
+
+def merge_model_into_fixture(fx, tax_rows=None):
+    """QUANT BRAIN: price the fixture with the Poisson model, apply one guarded
+    LLM context pass, then fuse model probs into every book row
+    (edge_vs_model = model_prob*book_odds - 1) and emit MODEL-ONLY rows for
+    priced markets that have no book line. Never raises."""
+    try:
+        base_rows, meta = model_poisson.build_fixture_model(
+            fx, team_ids=fx.get("team_ids"))
+    except Exception as e:
+        log("ACTUARY", f"model skipped: {type(e).__name__}: {e}")
+        fx["model_status"] = "error"
+        return
+    ctx = {"adjustments": [], "confidence": 0.0, "provider": "offline"}
+    try:
+        ctx = context_llm.get_context_adjustments(fx, meta)
+        meta = context_llm.apply_adjustments(meta, ctx.get("adjustments"))
+        adj_rows, _ = model_poisson.price_all_markets(
+            meta["lambda_home"], meta["lambda_away"],
+            meta.get("corner_rates"), meta.get("card_rates"),
+            league=fx.get("league") or "eng.1",
+            sample_games=meta.get("sample_games", 0))
+    except Exception as e:
+        log("CONTEXT", f"llm skipped ({type(e).__name__}) — math-only mode")
+        adj_rows = base_rows
+    cov = meta.get("coverage", {})
+    fx["model_coverage"] = {"priced": cov.get("priced", 0), "denominator": 200}
+    fx["context_provider"] = ctx.get("provider", "offline")
+    fx["context_confidence"] = ctx.get("confidence", 0.0)
+    fx["context_adjustments"] = ctx.get("adjustments", [])
+    hist_src = (meta.get("fit") or {}).get("source") or \
+        ("league_prior" if not meta.get("sample_games") else "n/a")
+    log("ACTUARY", f"fitted λ home={meta.get('lambda_home')} away={meta.get('lambda_away')} "
+                   f"(ρ={meta.get('rho')}, half_scale={meta.get('half_scale')}); "
+                   f"sample_games={meta.get('sample_games')} [history: {hist_src}]")
+    log("ACTUARY", f"priced {cov.get('priced', 0)}/200 taxonomy markets "
+                   f"({len(adj_rows)} selection rows)")
+    if fx.get("context_adjustments"):
+        parts = ", ".join(f"{a['target']}:{a['delta']:+.2f}" for a in fx["context_adjustments"])
+        log("CONTEXT", f"{fx['context_provider']} applied [{parts}] "
+                       f"conf={fx['context_confidence']}")
+    else:
+        log("CONTEXT", "no adjustments accepted — math-only mode "
+                       f"(provider={fx['context_provider']})")
+
+    # index model rows by taxonomy market + normalized selection
+    idx = {}
+    for r in adj_rows:
+        tn = r.get("taxonomy_market") or model_poisson._tax_name(
+            r["market"], TAX_FOOTBALL)
+        if not tn:
+            continue
+        idx[(tn, str(r["selection"]).lower())] = r
+
+    def match_row(book_market, book_sel):
+        tn = _tax_name(book_market)
+        if not tn:
+            return None
+        bs = (book_sel or "").lower()
+        cands = [(k, v) for k, v in idx.items() if k[0] == tn]
+        best = None
+        if "Full-Time Result" in tn:
+            key = ("home" if bs.startswith("home") else
+                   "away" if bs.startswith("away") else
+                   "draw" if bs.startswith("draw") else None)
+            for k, v in cands:
+                if k[1] == key:
+                    best = v
+        elif "Over/Under Total" in tn:
+            want_over = bs.startswith("over")
+            num = None
+            mnum = re.search(r"(\d+(?:\.\d+)?)", bs)
+            if mnum:
+                num = float(mnum.group(1))
+            for k, v in cands:
+                if (k[1] == "over") != want_over:
+                    continue
+                mk = re.search(r"(\d+(?:\.\d+)?)", v["market"])
+                if num is not None and mk and abs(float(mk.group(1)) - num) < 0.01:
+                    return v
+                if best is None:
+                    best = v
+        elif "Handicap" in tn:
+            for k, v in cands:
+                if k[1].startswith(bs.split()[0][:4]):
+                    best = v
+                    break
+        return best
+
+    used = set()
+    for row in fx["top_edges"]:
+        mr = match_row(row.get("market", ""), row.get("selection", ""))
+        if mr and mr.get("model_prob") is not None and row.get("book_odds"):
+            mp_ = float(mr["model_prob"])
+            row["model_prob"] = round(mp_, 4)
+            row["model_fair_odds"] = mr.get("model_fair_odds")
+            row["edge_vs_model"] = round(mp_ * float(row["book_odds"]) - 1.0, 4)
+            row["model_confidence"] = mr.get("confidence")
+            used.add((mr.get("taxonomy_market"), str(mr["selection"]).lower()))
+        else:
+            row.setdefault("model_prob", None)
+            row.setdefault("edge_vs_model", None)
+
+    extra = []
+    for r in adj_rows:
+        tn = r.get("taxonomy_market") or model_poisson._tax_name(
+            r["market"], TAX_FOOTBALL)
+        key = (tn, str(r["selection"]).lower())
+        if not tn or key in used:
+            continue
+        extra.append({"market": r["market"], "selection": r["selection"],
+                      "book_odds": None, "model_prob": r["model_prob"],
+                      "model_fair_odds": r["model_fair_odds"],
+                      "edge_vs_model": None, "ev_percent": None,
+                      "fair_odds": r["model_fair_odds"],
+                      "confidence_score": int(max(1, min(99, round(
+                          (r["model_prob"] or 0) * 100)))),
+                      "kelly_stake_pct": 0.0, "model_confidence": r["confidence"],
+                      "reasoning_summary": "MODEL-ONLY (no line yet)",
+                      "label": "MODEL-ONLY (no line yet)"})
+    fx["model_only_count"] = len(extra)
+    allrows = fx["top_edges"] + extra
+    allrows.sort(key=lambda x: (x.get("edge_vs_model") is None,
+                                -(x.get("edge_vs_model") or 0)))
+    fx["top_edges"] = allrows[:20]
+    fx["markets_scanned"] = len(allrows)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--query", required=True)
@@ -301,14 +463,18 @@ def main():
             if not isinstance(comp, dict):
                 continue
             home = away = "?"
+            home_id = away_id = None
             for c in (comp.get("competitors") or []):
                 if not isinstance(c, dict):
                     continue
-                nm = ((c.get("team") or {}) or {}).get("displayName") or "?"
+                tm = c.get("team") or {}
+                nm = tm.get("displayName") or "?"
                 if c.get("homeAway") == "home":
                     home = nm
+                    home_id = tm.get("id")
                 else:
                     away = nm
+                    away_id = tm.get("id")
             combined = f"{home} {away}".lower()
             if len(available) < 12:
                 available.append(f"{home} vs {away}")
@@ -323,6 +489,7 @@ def main():
                     fixtures.append({"fixture_id": str(ev.get("id") or f"{home}-{away}"),
                                      "home": home, "away": away, "sport": SPORT_KEY[sp],
                                      "league": lg, "kickoff_utc": ev.get("date") or "",
+                                     "team_ids": {"home": home_id, "away": away_id},
                                      "markets_scanned": len(rows),
                                      "top_edges": rows[:12], "diagrams": []})
                     n_match += 1
@@ -341,6 +508,15 @@ def main():
 
     for i, fx in enumerate(fixtures):
         log("ACTUARY", f"{fx['home']} vs {fx['away']}: de-vigged {fx['markets_scanned']} market lines")
+        if QUANT_OK and fx.get("sport") in IS_SOCCER:
+            try:
+                merge_model_into_fixture(fx)
+            except Exception as e:
+                log("ACTUARY", f"model merge skipped: {type(e).__name__}: {e}")
+                fx["model_status"] = "error"
+        elif QUANT_OK:
+            log("ACTUARY", f"{fx['home']} vs {fx['away']}: Poisson pricer is football-only "
+                           f"(sport={fx.get('sport')}) — book consensus rows unchanged")
         note = "CONTEXT: offline (math-only confidence)"
         gk = os.environ.get("GROQ_API_KEY")
         if gk:
