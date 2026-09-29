@@ -1,0 +1,49 @@
+name: Stratum Hunt On-Demand
+
+on:
+  workflow_dispatch:
+    inputs:
+      match_query:
+        description: 'Match to hunt today (e.g., Czechia vs Croatia)'
+        required: true
+        type: string
+      sport:
+        type: choice
+        options: [auto, soccer, nba, nfl, mlb, nhl]
+        default: auto
+      hunt_id:
+        description: 'Client hunt id'
+        required: false
+        type: string
+        default: 'auto'
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: stratum-hunt
+  cancel-in-progress: false
+
+jobs:
+  hunt:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Execute Hunt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+        run: |
+          pip install matplotlib --quiet
+          python scripts/hunt_match.py \
+            --query "${{ inputs.match_query }}" \
+            --sport "${{ inputs.sport }}" \
+            --hunt-id "${{ inputs.hunt_id }}"
