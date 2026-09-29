@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       match_query:
-        description: 'Match to hunt today (e.g., Czechia vs Croatia)'
+        description: 'Match to hunt today (e.g., Finland vs Belarus)'
         required: true
         type: string
       sport:
@@ -43,6 +43,8 @@ jobs:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
         run: |
           pip install matplotlib --quiet
+          pip install playwright --quiet
+          python -m playwright install chromium --with-deps
           python scripts/hunt_match.py \
             --query "${{ inputs.match_query }}" \
             --sport "${{ inputs.sport }}" \
