@@ -1,0 +1,13 @@
+{
+  "query": "Test vs Test",
+  "sport": "soccer",
+  "timestamp_utc": "2026-09-29T00:00:00Z",
+  "agents_executed": [
+    "scout"
+  ],
+  "markets_scanned_count": 12,
+  "top_edges": [],
+  "visual_reports_png": [],
+  "status": "complete",
+  "schema_version": "3.1.0"
+}

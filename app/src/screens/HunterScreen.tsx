@@ -1,3 +1,27 @@
+/**
+ * STRATUM V3.1 — HUNTER screen (SCHEDULED-SWARM search + ON-DEMAND hunt).
+ *
+ *   IDLE    -> "ENTER MATCH TO HUNT" input + sport selector (default
+ *              AUTO-DETECT) + [ SEARCH UNIVERSE ]. Universe is fetched ONCE
+ *              on mount and cached; typing/searching never hits the network.
+ *   RESULTS -> query matched a fixture → its ranked edges render in
+ *              ResultsDashboard. No match → honest red card + one-tap
+ *              "nearest fixtures in today's slate" list + an explicit
+ *              [ ⚡ REAL-TIME HUNT ] button. NEVER fabricated.
+ *   CONSOLE -> user pressed REAL-TIME HUNT: HunterConsole replays the live
+ *              agent trace while onDemandHunt polls data/hunts/latest.json
+ *              (plain GETs only — zero browser→workflow writes). Terminal
+ *              states: complete → dashboard; no_results → honest empty card;
+ *              error/timeout → retry card.
+ *
+ * Integrity rules honored here:
+ *   - zero browser→workflow POSTs anywhere on any path (the FORCE RESCAN
+ *     dispatch stays gated on build-time env and is disabled by default);
+ *   - empty top_edges renders as an honest "no verified edge" card;
+ *   - every figure shown comes from committed, schema-validated market data;
+ *   - unmount during CONSOLE aborts the poll loop (AbortController cleanup).
+ */
+
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import HunterConsole from '../components/HunterConsole';
 import ResultsDashboard from '../components/ResultsDashboard';
@@ -14,29 +38,15 @@ import {
   refreshUniverse,
   scanAgeLabel,
 } from '../lib/swarmClient';
+import {
+  HuntSnapshotView,
+  POLL_INTERVAL_MS,
+  startHunt,
+  waitForHunt,
+} from '../lib/onDemandHunt';
 import { Colors, Fonts, Radius, Spacing } from '../theme/colors';
 
-/**
- * STRATUM V3.0 — HUNTER screen (SCHEDULED-SWARM / client-side search model).
- *
- *   IDLE    -> "ENTER MATCH TO HUNT" input + sport selector (default
- *              AUTO-DETECT) + [ SEARCH UNIVERSE ]. Universe is fetched ONCE
- *              on mount and cached; typing/searching never hits the network.
- *   RESULTS -> query matched a fixture → its ranked edges render in
- *              ResultsDashboard. No match → honest red card + one-tap
- *              "nearest fixtures in today's slate" list. NEVER fabricated.
- *
- * There is NO long CONSOLE wait state: the swarm runs on a 15-min cron, so
- * the live terminal survives only as a collapsible AGENT-TRACE panel replaying
- * the last scheduled scan, clearly stamped with its age.
- *
- * Integrity rules honored here:
- *   - zero browser→workflow POSTs anywhere on any path (search-only client);
- *   - empty top_edges renders as an honest "no verified edge" card;
- *   - every figure shown comes from committed, schema-validated market data.
- */
-
-type Phase = 'IDLE' | 'RESULTS';
+type Phase = 'IDLE' | 'RESULTS' | 'CONSOLE';
 
 const SPORT_OPTIONS = [
   { value: 'auto', label: '🎯 Auto-detect sport' },
@@ -122,11 +132,22 @@ export default function HunterScreen() {
   const [traceOpen, setTraceOpen] = useState(false);
   const [rescanNote, setRescanNote] = useState('');
 
+  /* ---------------------- on-demand hunt (CONSOLE) state ------------------ */
+
+  const [liveLines, setLiveLines] = useState<HuntLine[]>([]);
+  const [liveProgress, setLiveProgress] = useState(0);
+  const [liveStage, setLiveStage] = useState('queued');
+  const [huntOutcome, setHuntOutcome] = useState<HuntSnapshotView | null>(null);
+  const huntAbortRef = useRef<AbortController | null>(null);
+
   const mountedRef = useRef(true);
   useEffect(() => {
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
+      // Cleanup contract: leaving the screen mid-hunt aborts the poll loop.
+      huntAbortRef.current?.abort();
+      huntAbortRef.current = null;
     };
   }, []);
 
@@ -209,6 +230,105 @@ export default function HunterScreen() {
       setRescanNote(`Rescan dispatch failed: ${(e as Error).message}`);
     }
   }, [triggerable]);
+
+  /* ---------------------------- on-demand hunt --------------------------- */
+
+  /** Deterministic console trace for one poll tick. Agent attribution follows
+   *  the swarm roles; every string is derived from REAL polled values (stage,
+   *  progress, counts) — nothing here invents market data. */
+  const pushLiveLine = useCallback((agent: HuntLine['agent'], text: string) => {
+    setLiveLines((prev) => {
+      const last = prev[prev.length - 1];
+      if (last && last.agent === agent && last.text === text) return prev; // dedupe ticks
+      return [...prev.slice(-199), { agent, text, ts: Date.now() }];
+    });
+  }, []);
+
+  const beginRealtimeHunt = useCallback(
+    async (rawQuery: string, sport: SportValue) => {
+      const trimmed = rawQuery.trim();
+      if (!trimmed) return;
+      huntAbortRef.current?.abort();
+      const controller = new AbortController();
+      huntAbortRef.current = controller;
+
+      setHuntOutcome(null);
+      setLiveLines([]);
+      setLiveProgress(0);
+      setLiveStage('queued');
+      setPhase('CONSOLE');
+
+      pushLiveLine('SWARM', `on-demand hunt accepted: "${trimmed}" (${sport})`);
+      pushLiveLine('SCOUT', 'watching data/hunts/latest.json — plain GET every ' +
+        `${Math.round(POLL_INTERVAL_MS / 1000)}s (no workflow writes from the browser)`);
+
+      let req;
+      try {
+        // Map UI sport values to the hunt contract's vocabulary
+        // (auto | soccer | basketball | tennis — see hunter_api.py --sport).
+        const huntSport =
+          sport === 'auto' ? 'auto' : sport === 'nba' ? 'basketball' : 'soccer';
+        req = await startHunt(trimmed, huntSport);
+      } catch (e) {
+        setHuntOutcome({ state: 'error', progress: 1, stage: 'client_error', result: null,
+                         message: (e as Error).message });
+        return;
+      }
+
+      try {
+        const outcome = await waitForHunt(req, {
+          signal: controller.signal,
+          onTick: (snap) => {
+            setLiveProgress(snap.progress);
+            setLiveStage(snap.stage);
+            switch (snap.state) {
+              case 'queued':
+                pushLiveLine('SWARM', snap.message ?? 'queued — waiting for a runner to pick the hunt up');
+                break;
+              case 'running':
+                pushLiveLine('SCOUT', `runner active · stage=${snap.stage} · progress=${Math.round(snap.progress * 100)}%`);
+                break;
+              case 'complete':
+                pushLiveLine('ACTUARY',
+                  `real-time scan complete · ${snap.result?.markets_scanned_count ?? 0} markets · ` +
+                  `${snap.result?.top_edges.length ?? 0} ranked edges (schema-validated)`);
+                break;
+              case 'no_results':
+                pushLiveLine('STRATEGIST', snap.message ?? 'scan finished with zero verified edges');
+                break;
+              case 'error':
+                pushLiveLine('SWARM', `hunt error: ${snap.message ?? snap.stage}`);
+                break;
+              default:
+                break;
+            }
+          },
+        });
+        if (controller.signal.aborted || !mountedRef.current) return;
+        setHuntOutcome(outcome);
+        if (outcome.state === 'complete' && outcome.result) {
+          // Hand the validated real-time result straight to the dashboard.
+          setMatch(null);
+          setNearMisses([]);
+        }
+      } catch (e) {
+        if ((e as Error)?.name === 'AbortError') return; // user navigated away
+        if (mountedRef.current) {
+          setHuntOutcome({ state: 'error', progress: 1, stage: 'network', result: null,
+                           message: (e as Error).message });
+        }
+      } finally {
+        if (huntAbortRef.current === controller) huntAbortRef.current = null;
+      }
+    },
+    [pushLiveLine],
+  );
+
+  const cancelHunt = useCallback(() => {
+    huntAbortRef.current?.abort();
+    huntAbortRef.current = null;
+    setPhase('RESULTS');
+  }, []);
 
   const onRefreshData = useCallback(async () => {
     if (!universe || refreshing) return;
@@ -327,6 +447,16 @@ export default function HunterScreen() {
         >
           {loading ? 'LOADING UNIVERSE…' : 'SEARCH UNIVERSE'}
         </button>
+        {/* On-demand escape hatch: skip the scheduled slate entirely and hunt
+            this exact query in real time (explicit user action → CONSOLE). */}
+        <button
+          type="button"
+          style={{ ...styles.huntBtn, opacity: !huntQuery.trim() ? 0.4 : 1 }}
+          onClick={() => void beginRealtimeHunt(huntQuery, selectedSport)}
+          disabled={!huntQuery.trim()}
+        >
+          ⚡ REAL-TIME HUNT
+        </button>
         {universe && (
           <div style={styles.slateHint}>
             {universe.fixture_count} fixtures priced across{' '}
@@ -334,6 +464,56 @@ export default function HunterScreen() {
           </div>
         )}
         {tracePanel}
+      </div>
+    );
+  }
+
+  /* --------------------------- CONSOLE (live hunt) ------------------------ */
+
+  if (phase === 'CONSOLE') {
+    const outcome = huntOutcome;
+    const hunting = outcome === null;
+    const liveResult: HuntResult | null =
+      outcome && outcome.state === 'complete' ? outcome.result : null;
+
+    return (
+      <div style={styles.resultsWrap}>
+        {header}
+        <div style={styles.heroTitleSmall}>⚡ REAL-TIME HUNT — {huntQuery}</div>
+        <HunterConsole
+          lines={liveLines}
+          progress={hunting ? liveProgress : 1}
+          stage={hunting ? liveStage : outcome?.stage ?? 'done'}
+          isActive={hunting}
+        />
+
+        {hunting ? (
+          <>
+            <div style={styles.slateHint}>
+              Polling the swarm queue (read-only GETs, every{' '}
+              {Math.round(POLL_INTERVAL_MS / 1000)}s). Runner turnaround is
+              typically 1–2 minutes. This never fabricates interim numbers.
+            </div>
+            <button type="button" style={styles.retryBtn} onClick={cancelHunt}>
+              ✕ CANCEL HUNT
+            </button>
+          </>
+        ) : liveResult ? (
+          <div style={{ marginTop: Spacing.lg }}>
+            <div style={styles.matchedStamp}>
+              ✓ LIVE SCAN RESULT · published {liveResult.timestamp_utc} · mode{' '}
+              <b>{liveResult.mode ?? 'realtime_hunt'}</b>
+            </div>
+            <ResultsDashboard result={liveResult} query={huntQuery} onStartHunt={resetToIdle} />
+          </div>
+        ) : (
+          <HuntFailureCard
+            state={outcome?.state ?? 'error'}
+            message={outcome?.message ?? 'The hunt did not complete.'}
+            onRetry={() => void beginRealtimeHunt(huntQuery, selectedSport)}
+            onBack={resetToIdle}
+          />
+        )}
       </div>
     );
   }
@@ -368,6 +548,7 @@ export default function HunterScreen() {
             nearMisses={nearMisses}
             onPick={pickNearest}
             onRetry={resetToIdle}
+            onHuntNow={() => void beginRealtimeHunt(huntQuery, selectedSport)}
           />
         )}
       </div>
@@ -386,11 +567,13 @@ function NoMatchCard({
   nearMisses,
   onPick,
   onRetry,
+  onHuntNow,
 }: {
   query: string;
   nearMisses: MatchResult[];
   onPick: (m: MatchResult) => void;
   onRetry: () => void;
+  onHuntNow: () => void;
 }) {
   return (
     <div style={styles.alertCard} data-testid="no-match-card">
@@ -426,10 +609,57 @@ function NoMatchCard({
       <button type="button" style={styles.retryBtn} onClick={onRetry}>
         ↻ NEW SEARCH
       </button>
+      {/* Explicit user action → CONSOLE phase: real-time hunt for this exact
+          query instead of settling for the 15-min scheduled slate. */}
+      <button type="button" style={styles.huntBtn} onClick={onHuntNow}>
+        ⚡ HUNT NOW (REAL-TIME)
+      </button>
       <div style={styles.disclaimer}>
         All figures derive from scraped market data + deterministic math. Stratum never
         fabricates prices — an absent fixture is reported as absent.
       </div>
+    </div>
+  );
+}
+
+/* --------------------------- hunt failure card ---------------------------- */
+
+/** Honest terminal state for error/timeout/no_results outcomes: explains,
+ *  offers RETRY HUNT + BACK — never renders stale numbers as live. */
+function HuntFailureCard({
+  state,
+  message,
+  onRetry,
+  onBack,
+}: {
+  state: string;
+  message: string;
+  onRetry: () => void;
+  onBack: () => void;
+}) {
+  const empty = state === 'no_results';
+  return (
+    <div
+      style={{
+        ...styles.alertCard,
+        marginTop: Spacing.lg,
+        ...(empty
+          ? { borderColor: Colors.warning, backgroundColor: 'rgba(245,184,77,0.06)' }
+          : null),
+      }}
+      data-testid="hunt-failure-card"
+    >
+      <div style={styles.alertIcon}>{empty ? '⚠️' : '⏱️'}</div>
+      <div style={styles.alertTitle}>
+        {empty ? 'Real-time scan found no verified edge.' : `Hunt did not complete (${state}).`}
+      </div>
+      <div style={styles.alertBody}>{message}</div>
+      <button type="button" style={styles.huntBtn} onClick={onRetry}>
+        ↻ RETRY HUNT
+      </button>
+      <button type="button" style={styles.retryBtn} onClick={onBack}>
+        ← BACK TO SEARCH
+      </button>
     </div>
   );
 }
@@ -455,6 +685,15 @@ const styles: Record<string, React.CSSProperties> = {
     boxSizing: 'border-box',
   },
   heroTitle: { color: Colors.textPrimary, fontSize: 30, fontWeight: 900, letterSpacing: 3, textAlign: 'center' },
+  heroTitleSmall: {
+    color: Colors.textPrimary, fontSize: 18, fontWeight: 900, letterSpacing: 2,
+    textAlign: 'center', marginBottom: Spacing.md,
+  },
+  huntBtn: {
+    backgroundColor: 'transparent', color: '#FFB020', border: '1px solid #FFB020',
+    borderRadius: 9999, padding: '11px 28px', fontWeight: 800, letterSpacing: 2,
+    textTransform: 'uppercase', fontSize: 13, cursor: 'pointer', fontFamily: Fonts.mono,
+  },
   heroSub: { color: Colors.textSecondary, fontSize: 13, textAlign: 'center', marginTop: -Spacing.sm },
   huntInput: {
     width: '100%', boxSizing: 'border-box', backgroundColor: '#0A0D14', color: Colors.textPrimary,

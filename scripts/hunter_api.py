@@ -998,6 +998,53 @@ def serve(port: int) -> None:
 # CLI
 # ---------------------------------------------------------------------------
 
+def publish_to_hunts_dir(payload: dict, output: str) -> str:
+    """Mirror a hunt payload into the committed queue layout so the PWA's
+    snapshot-poll transport (app/src/lib/onDemandHunt.ts) can read it from
+    raw.githubusercontent / the Pages bundle:
+
+        data/hunts/<UTCstamp>Z/hunt_result.json   (immutable per-hunt artifact)
+        data/hunts/latest.json                    (status pointer)
+
+    Returns the repo-relative artifact path (or '' when mirroring is off).
+    Mirroring happens whenever --output points at a *hunt result* file; CI
+    passes --hunt-id and HUNT_STAGE=1 to opt in. Purely additive: stdout /
+    --output behavior is unchanged.
+    """
+    if not output or os.environ.get("HUNT_STAGE", "0") != "1":
+        return ""
+    stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    hunt_id = os.environ.get("HUNT_ID") or f"cli-{stamp}"
+    root = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                        "data", "hunts")
+    art_dir = os.path.join(root, stamp)
+    os.makedirs(art_dir, exist_ok=True)
+    status = str(payload.get("status", "error"))
+    mapped = ("complete" if status == "success"
+              else status if status in ("no_results", "error")
+              else "error")
+    artifact = dict(payload)
+    artifact["schema_version"] = artifact.get("schema_version", "3.1.0")
+    artifact["status"] = mapped
+    artifact_path = os.path.join(art_dir, "hunt_result.json")
+    with open(artifact_path, "w", encoding="utf-8") as fh:
+        json.dump(artifact, fh, indent=2)
+    latest = {
+        "hunt_id": hunt_id,
+        "query": payload.get("query", ""),
+        "sport": payload.get("sport", "auto"),
+        "status": mapped,
+        "stage": "done",
+        "progress": 1.0,
+        "updated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "result_path": f"data/hunts/{stamp}/hunt_result.json",
+    }
+    with open(os.path.join(root, "latest.json"), "w", encoding="utf-8") as fh:
+        json.dump(latest, fh, indent=2)
+    log(f"published hunt artifacts under data/hunts/{stamp}/")
+    return f"data/hunts/{stamp}/hunt_result.json"
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description="Hunter Mode real-time scan")
     sub = ap.add_subparsers(dest="cmd")
@@ -1010,6 +1057,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                     choices=["auto", "soccer", "basketball", "tennis"])
     ap.add_argument("--output", "-o", type=str, default="",
                     help="write JSON here (default: stdout)")
+    ap.add_argument("--hunt-id", type=str, default="",
+                    help="correlation id echoed into data/hunts/latest.json")
     args = ap.parse_args(argv)
 
     if args.cmd == "serve":
@@ -1028,6 +1077,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         log(f"wrote {args.output}")
     else:
         print(text)
+    if args.hunt_id:
+        os.environ["HUNT_ID"] = args.hunt_id
+    publish_to_hunts_dir(payload, args.output)
     return 0 if payload["status"] == "success" else 2
 
 
