@@ -1,7 +1,7 @@
 
 // Primary source: raw GitHub feed committed by the engine every 15 minutes.
 export const FEED_URL =
-  'https://raw.githubusercontent.com/petersidann/Stratum/main/data/live_market_feed.json';
+  'https://raw.githubusercontent.com/petrsidann/Stratum/main/data/live_market_feed.json';
 
 // Bundled fallback: copy of the latest scan baked into the static site at
 // build time (CI copies data/live_market_feed.json to public/data/latest_scan.json).
