@@ -31,6 +31,18 @@ const primaryBtn: React.CSSProperties = {
 const th: React.CSSProperties = { color: C.muted, textAlign: "left", padding: "4px 8px 4px 0", fontWeight: 400 };
 const td: React.CSSProperties = { padding: "4px 10px 4px 0", verticalAlign: "top" };
 
+// KENYAN WELL: per-row source badges (inline styles only)
+const SRC_COLORS: Record<string, string> = { BETIKA: "#2EE6A6", ODIBETS: "#A3E635", ESPN: "#38BDF8", MODEL: "#8B9BB4" };
+function SourceBadge({ src }: { src?: string }) {
+  const s = (src || "ESPN").toUpperCase();
+  const col = SRC_COLORS[s] || "#8B9BB4";
+  return (
+    <span style={{ backgroundColor: col, color: "#000", borderRadius: 4, padding: "1px 5px", fontSize: 10, fontWeight: 700, fontFamily: MONO, marginRight: 6 }}>
+      {s}
+    </span>
+  );
+}
+
 export default function HunterScreen() {
   const [phase, setPhase] = useState<"IDLE" | "CONSOLE" | "RESULTS">("IDLE");
   const [query, setQuery] = useState("");
@@ -166,12 +178,29 @@ export default function HunterScreen() {
             ) : null}
           </p>
           {fx.context_note && <p style={{ color: C.yellow, fontSize: 13, margin: "0 0 12px" }}>{fx.context_note}</p>}
+          {(fx.top_edges || []).filter((e: any) => e.book_odds != null).length === 0 ? (
+            <div style={{ margin: "8px 0 12px" }}>
+              <p style={{ color: "#6B7686", fontSize: 13, fontFamily: MONO, margin: "0 0 6px" }}>
+                no lines from any source yet
+              </p>
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                <span key="ESPN" style={{ border: "1px solid #38BDF8", color: "#38BDF8", borderRadius: 999, padding: "2px 10px", fontSize: 11, fontFamily: MONO }}>
+                  ESPN: {fx.markets_scanned > 0 ? `${fx.markets_scanned} lines` : "no lines"}
+                </span>
+                {Object.entries(fx.kenya_status || {}).map(([k, v]) => (
+                  <span key={k} style={{ border: `1px solid ${SRC_COLORS[k] || "#8B9BB4"}`, color: SRC_COLORS[k] || "#8B9BB4", borderRadius: 999, padding: "2px 10px", fontSize: 11, fontFamily: MONO }}>
+                    {k}: {String(v)}
+                  </span>
+                ))}
+              </div>
+            </div>
+          ) : null}
           <table style={{ width: "100%", fontSize: 13, fontFamily: MONO, borderCollapse: "collapse" }}>
             <thead><tr><th style={th}>SELECTION</th><th style={th}>MARKET</th><th style={th}>BOOK</th><th style={th}>FAIR</th><th style={th}>HIT %</th><th style={th}>MODEL %</th><th style={th}>EDGE-vs-MODEL</th><th style={th}>EV %</th><th style={th}>KELLY</th></tr></thead>
             <tbody>
               {(fx.top_edges || []).map((e: any, i: number) => (
                 <tr key={i} style={{ borderTop: `1px solid ${C.borderSoft}` }}>
-                  <td style={{ ...td, color: C.accent }}>{e.selection}</td>
+                  <td style={{ ...td, color: C.accent }}><SourceBadge src={e.source} />{e.selection}</td>
                   <td style={{ ...td, color: C.muted }}>{e.market}</td>
                   <td style={td}>{e.book_odds == null ? <span style={{ color: "#6B7686" }}>no line yet</span> : e.book_odds}</td>
                   <td style={td}>{e.fair_odds}</td>

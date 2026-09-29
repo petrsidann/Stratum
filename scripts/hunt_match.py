@@ -185,10 +185,25 @@ def add_rows(rows, market_name, sel_odds, prov_count):
         rows.append({"market": market_name, "selection": s, "book_odds": b,
                      "fair_odds": round(fair, 3), "ev_percent": round(edge, 2),
                      "confidence_score": int(max(1, min(99, round(p * 100)))),
-                     "kelly_stake_pct": kelly,
+                     "kelly_stake_pct": kelly, "source": "ESPN",
                      "reasoning_summary": (
                          f"{prov_count} provider(s); vig {round((implied_sum - 1) * 100, 1)}% removed; "
                          f"consensus hit prob {round(p * 100, 1)}%; cross-book edge {round(edge, 2)}%.")})
+
+
+def _kenya_row_to_edge(r):
+    """KENYAN WELL: convert a scout_kenya row into the book-row shape.
+    Single source, so no cross-book consensus — hit prob = 1/odds with a
+    light 5% vig haircut; edge_vs_model is filled later by the model pass."""
+    b = float(r["decimal_odds"])
+    p = max(0.01, min(0.99, (1.0 / b) / 1.05))
+    fair = 1 / p
+    return {"market": r.get("market") or "Main", "selection": r.get("selection") or "?",
+            "book_odds": b, "fair_odds": round(fair, 3),
+            "ev_percent": round((b / fair - 1) * 100, 2),
+            "confidence_score": int(max(1, min(99, round(p * 100)))),
+            "kelly_stake_pct": 0.0, "source": r.get("source") or "BETIKA",
+            "reasoning_summary": f"{r.get('source') or 'BETIKA'} headless scrape; single-source line."}
 
 
 def markets_for_comp(comp):
@@ -412,7 +427,7 @@ def merge_model_into_fixture(fx, tax_rows=None):
                       "book_odds": None, "model_prob": r["model_prob"],
                       "model_fair_odds": r["model_fair_odds"],
                       "edge_vs_model": None, "ev_percent": None,
-                      "fair_odds": r["model_fair_odds"],
+                      "fair_odds": r["model_fair_odds"], "source": "MODEL",
                       "confidence_score": int(max(1, min(99, round(
                           (r["model_prob"] or 0) * 100)))),
                       "kelly_stake_pct": 0.0, "model_confidence": r["confidence"],
@@ -424,6 +439,45 @@ def merge_model_into_fixture(fx, tax_rows=None):
                                 -(x.get("edge_vs_model") or 0)))
     fx["top_edges"] = allrows[:20]
     fx["markets_scanned"] = len(allrows)
+
+
+def scout_kenya_into_fixture(fx):
+    """KENYAN WELL: when a matched fixture has ZERO bookmaker lines from any
+    source, drive headless Chromium over Betika (then Odibets best-effort) and
+    merge the scraped rows in with source tags. Never raises."""
+    try:
+        import scout_kenya
+    except Exception as e:
+        log("SCOUT-KENYA", f"module unavailable ({type(e).__name__}) — skipping well")
+        fx["kenya_status"] = {"BETIKA": "crash(module)", "ODIBETS": "crash(module)"}
+        return
+    log("SCOUT-KENYA", f"{fx['home']} vs {fx['away']}: no ESPN lines — opening the Kenyan well…")
+    try:
+        rows, statuses = scout_kenya.scout_both(fx["home"], fx["away"],
+                                                betika_timeout_s=60,
+                                                odibets_timeout_s=45)
+    except Exception as e:  # scout_* never raises; belt & braces
+        rows, statuses = [], {"BETIKA": f"crash({type(e).__name__})",
+                              "ODIBETS": f"crash({type(e).__name__})"}
+    fx["kenya_status"] = statuses
+    for src_, st in statuses.items():
+        log("SCOUT-KENYA", f"{src_}: {st}")
+    merged = []
+    seen = set()
+    for r in rows:
+        try:
+            er = _kenya_row_to_edge(r)
+        except Exception:
+            continue
+        k = (er["source"], er["market"], er["selection"], er["book_odds"])
+        if k in seen:
+            continue
+        seen.add(k)
+        merged.append(er)
+    if merged:
+        fx["top_edges"] = merged + fx.get("top_edges", [])
+        fx["markets_scanned"] = len(fx["top_edges"])
+        log("SCOUT-KENYA", f"merged {len(merged)} Kenyan book lines into the hunt")
 
 
 def main():
@@ -479,34 +533,52 @@ def main():
             if len(available) < 12:
                 available.append(f"{home} vs {away}")
             if toks and all(t in combined for t in toks):
+                n_match += 1
                 try:
                     rows = markets_for_comp(comp)
                 except Exception as e:
                     log("SCOUT", f"skip corrupt odds: {e}")
                     rows = []
-                if rows:
-                    rows.sort(key=lambda r: r["confidence_score"], reverse=True)
-                    fixtures.append({"fixture_id": str(ev.get("id") or f"{home}-{away}"),
-                                     "home": home, "away": away, "sport": SPORT_KEY[sp],
-                                     "league": lg, "kickoff_utc": ev.get("date") or "",
-                                     "team_ids": {"home": home_id, "away": away_id},
-                                     "markets_scanned": len(rows),
-                                     "top_edges": rows[:12], "diagrams": []})
-                    n_match += 1
+                # KENYAN WELL: a matched fixture is NEVER dropped for having
+                # zero ESPN lines — keep it (markets_scanned may be 0) so the
+                # Kenyan scout + model can still price it.
+                fixtures.append({"fixture_id": str(ev.get("id") or f"{home}-{away}"),
+                                 "home": home, "away": away, "sport": SPORT_KEY[sp],
+                                 "league": lg, "kickoff_utc": ev.get("date") or "",
+                                 "team_ids": {"home": home_id, "away": away_id},
+                                 "markets_scanned": len(rows),
+                                 "top_edges": sorted(
+                                     rows, key=lambda r: r["confidence_score"],
+                                     reverse=True)[:12],
+                                 "diagrams": [], "kenya_status": {}})
         sources[f"{sp}/{lg}"] = f"ok({n_match} matched)" if n_match else "no_fixture_in_board"
         log("SCOUT", f"{sp}/{lg}: {sources[f'{sp}/{lg}']}")
         post_state(hunt_id, "running", "SCOUT", 0.05 + 0.55 * done / len(leagues))
 
     if not fixtures:
-        log("STRATEGIST", "no fixture matched today — honest empty result")
+        # HONEST MESSAGE: distinguish "matched today but zero lines retrieved"
+        # (Kenian well included) from "fixture truly absent from today's slate".
+        matched_today = any(st.startswith("ok(") for st in sources.values())
+        src_list = ", ".join(f"{k}={v}" for k, v in list(sources.items())[:12]) or "none polled"
+        if matched_today:
+            err_msg = ("Match found today, but no bookmaker lines retrieved yet. "
+                       f"Source statuses: {src_list}.")
+        else:
+            err_msg = (f"No match today containing '{args.query}'. "
+                       "Teams playing today: see list.")
+        log("STRATEGIST", "no priced fixture today — honest empty result")
         res = {"fixtures": [], "sources_status": sources, "available_today": available,
-               "error_message": f"No match today containing '{args.query}'. Teams playing today: see list."}
+               "error_message": err_msg}
         post_state(hunt_id, "no_results", "DONE", 1.0, res)
         publish_latest(hunt_id, "no_results", res)
         verify_delivery()
         return
 
     for i, fx in enumerate(fixtures):
+        # KENYAN WELL: zero lines from ESPN -> try Betika/Odibets headless first,
+        # then let the model price everything (edge_vs_model per merged row).
+        if not fx["top_edges"] and fx.get("sport") in IS_SOCCER:
+            scout_kenya_into_fixture(fx)
         log("ACTUARY", f"{fx['home']} vs {fx['away']}: de-vigged {fx['markets_scanned']} market lines")
         if QUANT_OK and fx.get("sport") in IS_SOCCER:
             try:
@@ -541,11 +613,20 @@ def main():
         u = make_chart(fx, hunt_id, i)
         if u:
             fx["diagrams"].append(u)
-    best = fixtures[0]["top_edges"][0] if fixtures[0]["top_edges"] else None
+    best = next((f["top_edges"][0] for f in fixtures if f["top_edges"]), None)
     if best:
         log("STRATEGIST", f"TOP PICK: {best['selection']} @ {best['book_odds']} "
                           f"(hit prob {best['confidence_score']}%, edge {best['ev_percent']}%)")
     res = {"fixtures": fixtures, "sources_status": sources, "available_today": available}
+    # HONEST MESSAGE: every source returned zero rows -> say so precisely.
+    if not any(f.get("top_edges") for f in fixtures):
+        parts = []
+        for f in fixtures:
+            ks = f.get("kenya_status") or {}
+            st = ", ".join([f"ESPN=no lines"] + [f"{k.lower()}={v}" for k, v in ks.items()])
+            parts.append(f"{f['home']} vs {f['away']}: {st}")
+        res["error_message"] = ("Match found today, but no bookmaker lines retrieved yet. "
+                                "Source statuses: " + " | ".join(parts) + ".")
     post_state(hunt_id, "complete", "DONE", 1.0, res)
     publish_latest(hunt_id, "complete", res)
     verify_delivery()

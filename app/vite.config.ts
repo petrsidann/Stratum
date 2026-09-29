@@ -4,7 +4,7 @@ import { VitePWA } from 'vite-plugin-pwa';
 
 // Stratum V2.0 PWA build configuration.
 // Base path is "./" so the static bundle works on GitHub Pages project sites
-// (e.g. https://petersidann.github.io/Stratum/) without extra configuration.
+// (e.g. https://petrsidann.github.io/Stratum/) without extra configuration.
 export default defineConfig({
   base: './',
   plugins: [
