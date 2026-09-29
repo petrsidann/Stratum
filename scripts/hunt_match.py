@@ -47,9 +47,9 @@ def api(path, method="GET", payload=None):
 
 def post_state(hunt_id, status, stage, progress, result=None):
     global COMMENT_URL
-    body = json.dumps({"hunt_id": hunt_id, "status": status, "stage": stage,
-                       "progress": progress, "lines": LINES[-80:],
-                       "result": result}, indent=1)[:60000]
+    body = "```json\n" + json.dumps({"hunt_id": hunt_id, "status": status, "stage": stage,
+                                     "progress": progress, "lines": LINES[-80:],
+                                     "result": result}, indent=1)[:59900] + "\n```"
     if COMMENT_URL:
         api(COMMENT_URL, "PATCH", {"body": body})
         return
@@ -94,6 +94,19 @@ def publish_latest(hunt_id, status, result):
     if isinstance(existing, dict) and existing.get("sha"):
         p["sha"] = existing["sha"]
     api("/contents/data/hunts/latest.json", "PUT", p)
+
+
+def verify_delivery():
+    """GET our own raw latest.json URL and log HTTP status + first 200 chars,
+    so every future run proves delivery from the log itself."""
+    raw = f"https://raw.githubusercontent.com/{REPO}/main/data/hunts/latest.json"
+    try:
+        req = urlreq.Request(raw, headers={"User-Agent": "curl/8.5.0", "Accept": "*/*"})
+        with urlreq.urlopen(req, timeout=15) as r:
+            head = r.read(200).decode("utf-8", "replace")
+            log("SYSTEM", f"delivery proof: GET {raw} -> HTTP {r.status}; head={head[:200]!r}")
+    except Exception as e:
+        log("SYSTEM", f"delivery proof FAILED: GET {raw} -> {e}")
 
 
 def http_get(url, timeout=15):
@@ -323,6 +336,7 @@ def main():
                "error_message": f"No match today containing '{args.query}'. Teams playing today: see list."}
         post_state(hunt_id, "no_results", "DONE", 1.0, res)
         publish_latest(hunt_id, "no_results", res)
+        verify_delivery()
         return
 
     for i, fx in enumerate(fixtures):
@@ -358,6 +372,7 @@ def main():
     res = {"fixtures": fixtures, "sources_status": sources, "available_today": available}
     post_state(hunt_id, "complete", "DONE", 1.0, res)
     publish_latest(hunt_id, "complete", res)
+    verify_delivery()
 
 
 if __name__ == "__main__":
@@ -372,6 +387,7 @@ if __name__ == "__main__":
             res = {"fixtures": [], "sources_status": {}, "available_today": [], "error_message": str(e)}
             post_state(hid, "error", "FAILED", 1.0, res)
             publish_latest(hid, "error", res)
+            verify_delivery()
         except Exception:
             pass
     sys.exit(0)
