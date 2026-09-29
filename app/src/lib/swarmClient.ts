@@ -1,4 +1,4 @@
-const OWNER = "petersidann";
+const OWNER = "petrsidann";
 const REPO = "Stratum";
 const API = `https://api.github.com/repos/${OWNER}/${REPO}`;
 const RAW_LATEST = `https://raw.githubusercontent.com/${OWNER}/${REPO}/main/data/hunts/latest.json`;
