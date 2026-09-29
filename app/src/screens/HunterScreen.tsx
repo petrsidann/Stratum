@@ -159,18 +159,28 @@ export default function HunterScreen() {
           <h2 style={{ fontSize: 20, fontWeight: 700, margin: "0 0 4px" }}>{fx.home} @ {fx.away}</h2>
           <p style={{ color: C.muted, fontFamily: MONO, fontSize: 13, margin: "0 0 4px" }}>
             {fx.sport} · {fx.league} · {fx.kickoff_utc} · {fx.markets_scanned} market lines scanned
+            {fx.model_coverage ? (
+              <span style={{ marginLeft: 8, backgroundColor: C.panel, border: `1px solid ${C.border}`, borderRadius: 6, padding: "2px 8px", color: C.accent }}>
+                COVERAGE {fx.model_coverage.priced}/{fx.model_coverage.denominator || 200}
+              </span>
+            ) : null}
           </p>
           {fx.context_note && <p style={{ color: C.yellow, fontSize: 13, margin: "0 0 12px" }}>{fx.context_note}</p>}
           <table style={{ width: "100%", fontSize: 13, fontFamily: MONO, borderCollapse: "collapse" }}>
-            <thead><tr><th style={th}>SELECTION</th><th style={th}>MARKET</th><th style={th}>BOOK</th><th style={th}>FAIR</th><th style={th}>HIT %</th><th style={th}>EV %</th><th style={th}>KELLY</th></tr></thead>
+            <thead><tr><th style={th}>SELECTION</th><th style={th}>MARKET</th><th style={th}>BOOK</th><th style={th}>FAIR</th><th style={th}>HIT %</th><th style={th}>MODEL %</th><th style={th}>EDGE-vs-MODEL</th><th style={th}>EV %</th><th style={th}>KELLY</th></tr></thead>
             <tbody>
               {(fx.top_edges || []).map((e: any, i: number) => (
                 <tr key={i} style={{ borderTop: `1px solid ${C.borderSoft}` }}>
                   <td style={{ ...td, color: C.accent }}>{e.selection}</td>
                   <td style={{ ...td, color: C.muted }}>{e.market}</td>
-                  <td style={td}>{e.book_odds}</td><td style={td}>{e.fair_odds}</td>
+                  <td style={td}>{e.book_odds == null ? <span style={{ color: "#6B7686" }}>no line yet</span> : e.book_odds}</td>
+                  <td style={td}>{e.fair_odds}</td>
                   <td style={{ ...td, color: C.green, fontWeight: 700 }}>{e.confidence_score}</td>
-                  <td style={{ ...td, color: e.ev_percent > 0 ? C.green : C.muted }}>{e.ev_percent}</td>
+                  <td style={{ ...td, color: C.accent }}>{e.model_prob != null ? Math.round(e.model_prob * 1000) / 10 : "—"}</td>
+                  <td style={{ ...td, color: e.edge_vs_model == null ? "#6B7686" : e.edge_vs_model > 0 ? C.green : C.red }}>
+                    {e.label === "MODEL-ONLY (no line yet)" ? "MODEL-ONLY (no line yet)" : e.edge_vs_model != null ? `${Math.round(e.edge_vs_model * 10000) / 100}%` : "—"}
+                  </td>
+                  <td style={{ ...td, color: e.ev_percent > 0 ? C.green : C.muted }}>{e.ev_percent ?? "—"}</td>
                   <td style={td}>{e.kelly_stake_pct}</td>
                 </tr>
               ))}
