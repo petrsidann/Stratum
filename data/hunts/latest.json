@@ -1,9 +1,9 @@
 {
-  "hunt_id": "hmumxlsycjhgeq",
+  "hunt_id": "hmumxmbsjb3w2y",
   "status": "no_results",
   "stage": "DONE",
   "progress": 1.0,
-  "generated_at_utc": "2026-09-29T17:10:07.577459+00:00",
+  "generated_at_utc": "2026-09-29T17:10:33.903255+00:00",
   "fixtures": [],
   "sources_status": {
     "soccer/eng.1": "no_fixture_in_board",
