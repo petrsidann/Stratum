@@ -4,7 +4,7 @@ publishes diagrams + data/hunts/latest.json. Always exits 0."""
 import json, os, re, sys, time, base64, argparse, datetime as dt
 from urllib import request as urlreq, error as urlerr
 
-REPO = os.environ.get("GITHUB_REPOSITORY", "petersidann/Stratum")
+REPO = os.environ.get("GITHUB_REPOSITORY", "petrsidann/Stratum")
 TK = os.environ.get("GITHUB_TOKEN", "")
 API = f"https://api.github.com/repos/{REPO}"
 CHANNEL_TITLE = "STRATUM_HUNT_CHANNEL"
