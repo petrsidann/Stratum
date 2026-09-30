@@ -339,7 +339,8 @@ def merge_model_into_fixture(fx, tax_rows=None):
         log("CONTEXT", f"llm skipped ({type(e).__name__}) — math-only mode")
         adj_rows = base_rows
     cov = meta.get("coverage", {})
-    fx["model_coverage"] = {"priced": cov.get("priced", 0), "denominator": 200}
+    _denom = cov.get("denominator") or cov.get("taxonomy_rows") or len(TAX_FOOTBALL) or 44
+    fx["model_coverage"] = {"priced": cov.get("priced", 0), "denominator": _denom}
     fx["context_provider"] = ctx.get("provider", "offline")
     fx["context_confidence"] = ctx.get("confidence", 0.0)
     fx["context_adjustments"] = ctx.get("adjustments", [])
@@ -348,7 +349,7 @@ def merge_model_into_fixture(fx, tax_rows=None):
     log("ACTUARY", f"fitted λ home={meta.get('lambda_home')} away={meta.get('lambda_away')} "
                    f"(ρ={meta.get('rho')}, half_scale={meta.get('half_scale')}); "
                    f"sample_games={meta.get('sample_games')} [history: {hist_src}]")
-    log("ACTUARY", f"priced {cov.get('priced', 0)}/200 taxonomy markets "
+    log("ACTUARY", f"priced {cov.get('priced', 0)}/{_denom} taxonomy markets "
                    f"({len(adj_rows)} selection rows)")
     if fx.get("context_adjustments"):
         parts = ", ".join(f"{a['target']}:{a['delta']:+.2f}" for a in fx["context_adjustments"])

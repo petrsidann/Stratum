@@ -173,7 +173,7 @@ export default function HunterScreen() {
             {fx.sport} · {fx.league} · {fx.kickoff_utc} · {fx.markets_scanned} market lines scanned
             {fx.model_coverage ? (
               <span style={{ marginLeft: 8, backgroundColor: C.panel, border: `1px solid ${C.border}`, borderRadius: 6, padding: "2px 8px", color: C.accent }}>
-                COVERAGE {fx.model_coverage.priced}/{fx.model_coverage.denominator || 200}
+                COVERAGE {fx.model_coverage.priced}/{fx.model_coverage.denominator || 44}
               </span>
             ) : null}
           </p>

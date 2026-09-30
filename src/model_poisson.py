@@ -536,33 +536,87 @@ def _tax_name(market, tax_set):
         return "1st Half Corners"
     if low.startswith("corner race to"):
         return "Race to X Corners"
-    if low.startswith("total cards over/under") or low.startswith("yellow card race"):
+    # --- full alias map (EDGE ENGINE item c): emitted name -> owner taxonomy row
+    if low.startswith("match result") or low.startswith("full-time result"):
+        return "Full-Time Result (1X2)"
+    if low == "home win":
+        return "Full-Time Result (1X2)"
+    if low == "away win":
+        return "Full-Time Result (1X2)"
+    if low == "draw":
+        return "Full-Time Result (1X2)"
+    if low.startswith("half time result"):
+        return "1st Half Result"
+    if low.startswith("2nd half result"):
+        return "2nd Half Result"
+    if low.startswith("both teams to score"):
+        return "Both Teams to Score (BTTS)"
+    if low.startswith("btts & over") or low.startswith("btts & under"):
+        return "Both Teams to Score (BTTS)"
+    if low.startswith("exact total goals"):
+        return "Exact Total Goals"
+    if low.startswith("multi-goal"):
+        return "Multi-Goals (Bands e.g., 1-2, 2-3, 4-6)"
+    if low.startswith("team total goals"):
+        return "Team Total Goals (Over/Under)"
+    if "clean sheet" in low:
+        return "Clean Sheet (Home/Away)"
+    if low.startswith("to win to nil"):
+        return "To Win to Nil"
+    if low.startswith("correct score any other"):
+        return "Correct Score"
+    if low.startswith("correct score"):
+        return "Correct Score"
+    if low.startswith("european handicap"):
+        return "European Handicap"
+    if low.startswith("asian handicap"):
+        return "Asian Handicap"
+    if low.startswith("winning margin"):
+        return "Winning Margin"
+    if low.startswith("double chance"):
+        return "Double Chance"
+    if low.startswith("undefeated"):
+        return "Double Chance"
+    if low.startswith("draw no bet"):
+        return "Draw No Bet"
+    if low.startswith("1st half draw no bet"):
+        return "Draw No Bet"
+    if low.startswith("full time / half time") or low.startswith("half-time/full-time"):
+        return "Half-Time/Full-Time"
+    if low.startswith("total goals over/under"):
+        return "Over/Under Total Goals (0.5, 1.5, 2.5, 3.5, 4.5, 5.5)"
+    if low.startswith("1st half over/under"):
+        return "1st Half Over/Under Total Goals"
+    if low.startswith("2nd half over/under"):
+        return "2nd Half Over/Under Total Goals"
+    if low.startswith("highest scoring half"):
+        return "Highest Scoring Half"
+    if low.startswith("1st half more goals"):
+        return "Highest Scoring Half"
+    if low.startswith("both teams score in both halves"):
+        return "Both Teams to Score in Both Halves"
+    if low.startswith("score at minute") or low.startswith("goal between"):
+        return "Result after 15/30/60 Minutes"
+    if low.startswith("lead at half-time"):
+        return "1st Half Result"
+    if low.startswith("total corners over/under"):
+        return "Total Match Corners (Over/Under)"
+    if low.startswith("home team corners") or low.startswith("away team corners"):
+        return "Team Total Corners"
+    if low.startswith("most corners - 1st half") \
+       or low.startswith("home team over/under 6 corners in 1st half"):
+        return "1st Half Corners"
+    if low.startswith("corners 1x2"):
+        return "Team Total Corners"
+    if low.startswith("yellow card race to"):
+        return "Total Match Cards / Booking Points"
+    if low.startswith("total cards over/under"):
         return "Total Match Cards / Booking Points"
     if low.startswith("home team cards") or low.startswith("away team cards") \
        or low.startswith("most cards"):
         return "Team Total Cards"
     if low.startswith("red card shown"):
         return "Red Card in Match (Yes/No)"
-    if low.startswith("winning margin"):
-        return "Winning Margin"
-    if low.startswith("draw no bet"):
-        return "Draw No Bet"
-    if low.startswith("double chance"):
-        return "Double Chance"
-    if low.startswith("both teams to score"):
-        return "Both Teams to Score (BTTS)"
-    if low.startswith("match result (1x2)") or low.startswith("full-time result"):
-        return "Full-Time Result (1X2)"
-    if low.startswith("to win to nil"):
-        return "To Win to Nil"
-    if low.startswith("exact total goals"):
-        return "Exact Total Goals"
-    if low.startswith("result after 15/30"):
-        return "Result after 15/30/60 Minutes"
-    if low.startswith("highest scoring half"):
-        return "Highest Scoring Half"
-    if low.startswith("score at minute") or low.startswith("goal between"):
-        return "Result after 15/30/60 Minutes"
     return None
 
 
@@ -640,7 +694,7 @@ def price_all_markets(lambda_home, lambda_away, corner_rates=None, card_rates=No
         coverage = {"priced": len({r.get("taxonomy_market") for r in rows
                                    if r.get("taxonomy_market")}),
                     "taxonomy_rows": len(tax_set) or 44,
-                    "denominator": 200}
+                    "denominator": len(tax_set) or 44}
         return rows, {"lambda_home": lh, "lambda_away": la, "rho": RHO,
                       "half_scale": HALF_SCALE, "coverage": coverage,
                       "confidence": conf, "sample_games": 0,
@@ -889,7 +943,7 @@ def price_all_markets(lambda_home, lambda_away, corner_rates=None, card_rates=No
     total_tax = len(tax_set) or 44
     coverage = {"priced": len(priced_tax),
                 "taxonomy_rows": total_tax,
-                "denominator": 200}
+                "denominator": total_tax}
     return rows, {"lambda_home": lh, "lambda_away": la, "rho": RHO,
                   "half_scale": HALF_SCALE, "coverage": coverage,
                   "confidence": conf, "sample_games": samp,
