@@ -324,6 +324,54 @@ def tokens_of(q):
     return [t for t in re.split(r"[^a-z0-9]+", q.lower()) if t and t not in ("vs", "v", "the", "and")]
 
 
+# --- SPEAK-UP(2): fuzzy team-name matching ----------------------------------
+# Root cause of "ESPN returns today's slate but ZERO odds lines attached":
+# the hunt matched fixtures with `all(t in f"{home} {away}".lower() ...)`, a
+# substring test. A query like "denmark portugal" fails against ESPN display
+# names carrying suffixes ("Denmark FC", "Portugal SC", country tags), so the
+# fixture never entered `fixtures` at all and its book rows were never fetched.
+# These helpers normalize + token-overlap match instead, for BOTH teams.
+_STRIP_WORDS = {"fc", "cf", "sc", "afc", "cfc", "club", "clube", "de", "the",
+                "team", "national", "men", "w", "women", "u21", "u20", "u19",
+                "usa", "usa"}
+_COUNTRY_SUFFIX = {"republic", "states"}
+
+
+def norm_team(s):
+    """lowercase, strip punctuation, drop FC/SC/country-ish suffix tokens."""
+    s = re.sub(r"[^a-z0-9 ]+", " ", (s or "").lower())
+    toks = [t for t in s.split() if t not in _STRIP_WORDS and t not in _COUNTRY_SUFFIX]
+    return toks or [t for t in s.split() if t]
+
+
+def _tok_overlap(query_tok, name_toks):
+    """fraction of query tokens found in the normalized team name tokens."""
+    if not query_tok or not name_toks:
+        return 0.0
+    hits = sum(1 for t in query_tok if any(t == nt or t in nt or nt in t
+                                           for nt in name_toks))
+    return hits / len(query_tok)
+
+
+def fuzzy_fixture_match(home, away, toks, threshold=0.6):
+    """True when the query tokens cover BOTH teams (each side >= threshold).
+    Single-token team names still need an exact/substring hit on that token."""
+    h_toks = norm_team(home)
+    a_toks = norm_team(away)
+    # split query tokens greedily between the two names by best combined overlap
+    best = None
+    n = len(toks)
+    for i in range(n + 1):
+        left, right = toks[:i], toks[i:]
+        sl = _tok_overlap(left, h_toks) if left else 0.0
+        sr = _tok_overlap(right, a_toks) if right else 0.0
+        if left and right and min(sl, sr) >= threshold:
+            score = sl + sr
+            if best is None or score > best:
+                best = score
+    return best is not None
+
+
 def _tax_name(book_market):
     """Map a book market name to its taxonomy row (owner CSV), or None."""
     if not TAX_FOOTBALL:
@@ -609,13 +657,18 @@ def main():
             combined = f"{home} {away}".lower()
             if len(available) < 12:
                 available.append(f"{home} vs {away}")
-            if toks and all(t in combined for t in toks):
+            # SPEAK-UP(2): fuzzy join — substring OR normalized token overlap,
+            # so suffixed display names ("Denmark FC") still attach their odds.
+            if toks and (all(t in combined for t in toks)
+                         or fuzzy_fixture_match(home, away, toks)):
                 n_match += 1
                 try:
                     rows = markets_for_comp(comp)
                 except Exception as e:
                     log("SCOUT", f"skip corrupt odds: {e}")
                     rows = []
+                log("SCOUT", f"fuzzy-joined {home} vs {away}: "
+                             f"{len(rows)} ESPN odds rows attached")
                 # KENYAN WELL: a matched fixture is NEVER dropped for having
                 # zero ESPN lines — keep it (markets_scanned may be 0) so the
                 # Kenyan scout + model can still price it.
