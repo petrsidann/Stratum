@@ -442,7 +442,41 @@ def merge_model_into_fixture(fx, tax_rows=None):
     allrows.sort(key=lambda x: (x.get("edge_vs_model") is None,
                                 -(x.get("edge_vs_model") or 0)))
     fx["top_edges"] = allrows[:20]
+    fx["_all_priced_rows"] = allrows
     fx["markets_scanned"] = len(allrows)
+    _append_ledger(fx, allrows)
+
+
+# ---------------- EDGE ENGINE item (a): LEDGER ----------------
+LEDGER_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data", "ledger.jsonl")
+
+
+def _append_ledger(fx, priced_rows):
+    """Append every priced row to data/ledger.jsonl. Guarded, never raises."""
+    try:
+        ts = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
+        fid = str(fx.get("fixture_id") or
+                  f"{fx.get('home')}-{fx.get('away')}-{fx.get('kickoff_utc', '')}")
+        lines = []
+        for r in priced_rows:
+            lines.append(json.dumps({
+                "ts": ts, "fixture_id": fid,
+                "home": fx.get("home"), "away": fx.get("away"),
+                "kickoff": fx.get("kickoff_utc") or "",
+                "market": r.get("market"), "selection": r.get("selection"),
+                "model_prob": r.get("model_prob"),
+                "pick_odds": r.get("book_odds"),
+                "source": r.get("source"),
+                "ensemble_kind": r.get("ensemble_kind"),
+                "graded": False}, separators=(",", ":")))
+        if not lines:
+            return
+        os.makedirs(os.path.dirname(LEDGER_PATH), exist_ok=True)
+        with open(LEDGER_PATH, "a", encoding="utf-8") as fh:
+            fh.write("\n".join(lines) + "\n")
+        log("LEDGER", f"appended {len(lines)} priced rows ({fid})")
+    except Exception as e:
+        log("LEDGER", f"append skipped ({type(e).__name__}) — hunt continues")
 
 
 def scout_kenya_into_fixture(fx):
@@ -634,6 +668,15 @@ def main():
     post_state(hunt_id, "complete", "DONE", 1.0, res)
     publish_latest(hunt_id, "complete", res)
     verify_delivery()
+    # EDGE ENGINE item (a): grade the ledger at the END of every hunt (guarded).
+    try:
+        import subprocess
+        gp = os.path.join(os.path.dirname(os.path.abspath(__file__)), "grade_ledger.py")
+        if os.path.exists(gp):
+            subprocess.run([sys.executable, gp], timeout=240, check=False)
+            log("GRADER", "end-of-hunt grading pass done")
+    except Exception as e:
+        log("GRADER", f"grading skipped ({type(e).__name__}) — hunt stays green")
 
 
 if __name__ == "__main__":
