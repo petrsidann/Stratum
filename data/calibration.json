@@ -1,0 +1,12 @@
+{
+  "updated_utc": "2026-10-01T14:02:40+00:00",
+  "graded_rows": 0,
+  "won": 0,
+  "lost": 0,
+  "push": 0,
+  "brier_model": null,
+  "brier_samples": 0,
+  "buckets": [],
+  "clv_mean_pct": null,
+  "clv_samples": 0
+}
