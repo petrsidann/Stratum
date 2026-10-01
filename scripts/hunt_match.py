@@ -327,14 +327,17 @@ def merge_model_into_fixture(fx, tax_rows=None):
         fx["model_status"] = "error"
         return
     ctx = {"adjustments": [], "confidence": 0.0, "provider": "offline"}
+    adj_rows = base_rows
     try:
         ctx = context_llm.get_context_adjustments(fx, meta)
-        meta = context_llm.apply_adjustments(meta, ctx.get("adjustments"))
-        adj_rows, _ = model_poisson.price_all_markets(
-            meta["lambda_home"], meta["lambda_away"],
-            meta.get("corner_rates"), meta.get("card_rates"),
-            league=fx.get("league") or "eng.1",
-            sample_games=meta.get("sample_games", 0))
+        if ctx.get("adjustments"):
+            # EDGE ENGINE item (b): re-price ALL taxonomy markets on the
+            # context-adjusted lambdas/rates while keeping the SAME blended
+            # 1X2 triple from the ensemble pass (coherent per-row ensemble).
+            ameta = context_llm.apply_adjustments(meta, ctx.get("adjustments"))
+            blended_triple = (meta.get("ensemble") or {}).get("outcome_blended")
+            adj_rows, meta = model_poisson.reprice_with_context(
+                base_rows, meta, ameta, blended_triple)
     except Exception as e:
         log("CONTEXT", f"llm skipped ({type(e).__name__}) — math-only mode")
         adj_rows = base_rows

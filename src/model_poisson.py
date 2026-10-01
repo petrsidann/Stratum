@@ -697,6 +697,7 @@ def price_all_markets(lambda_home, lambda_away, corner_rates=None, card_rates=No
                     "denominator": len(tax_set) or 44}
         return rows, {"lambda_home": lh, "lambda_away": la, "rho": RHO,
                       "half_scale": HALF_SCALE, "coverage": coverage,
+                      "league": league,
                       "confidence": conf, "sample_games": 0,
                       "corner_rates": {"home": ch, "away": ca},
                       "card_rates": {"home": kh, "away": kv},
@@ -948,6 +949,7 @@ def price_all_markets(lambda_home, lambda_away, corner_rates=None, card_rates=No
                 "denominator": total_tax}
     return rows, {"lambda_home": lh, "lambda_away": la, "rho": RHO,
                   "half_scale": HALF_SCALE, "coverage": coverage,
+                  "league": league,
                   "confidence": conf, "sample_games": samp,
                   "corner_rates": {"home": ch, "away": ca},
                   "card_rates": {"home": kh, "away": kv},
@@ -1295,8 +1297,10 @@ def reprice_with_context(base_rows, base_meta, adj_meta, blended_triple,
         la = float(adj_meta.get("lambda_away", base_meta.get("lambda_away")))
         cr = adj_meta.get("corner_rates") or base_meta.get("corner_rates")
         ka = adj_meta.get("card_rates") or base_meta.get("card_rates")
+        # league lives in meta["fit"]["league"] (price_all_markets nests it)
+        _lg = base_meta.get("league") or (base_meta.get("fit") or {}).get("league")
         rows, meta = price_all_markets(lh, la, cr, ka,
-                                       league=base_meta.get("league"),
+                                       league=_lg,
                                        sample_games=base_meta.get("sample_games", 0))
         meta.update({k: base_meta.get(k) for k in
                      ("fit", "rest_days_home", "rest_days_away", "h2h_dates",
