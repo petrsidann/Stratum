@@ -22,7 +22,7 @@ export const SPORTS = [
 const STORAGE_KEY = 'stratum.settings';
 
 export const DEFAULT_SETTINGS: Settings = {
-  bankroll: 1000,
+  bankroll: 100, // EDGE ENGINE item (e): default bankroll in units
   notifications: false,
   enabledSports: [...SPORTS],
 };

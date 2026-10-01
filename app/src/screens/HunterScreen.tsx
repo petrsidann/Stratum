@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { dispatchHunt, pollHunt, pollLatest, getToken, setToken, AGENT_COLORS } from "../lib/swarmClient";
+import { loadSettings } from "../utils/settings";
 
 const C = {
   bg: "#0F111A", panel: "#1E2330", panelDeep: "#0B0D12",
@@ -32,7 +33,28 @@ const th: React.CSSProperties = { color: C.muted, textAlign: "left", padding: "4
 const td: React.CSSProperties = { padding: "4px 10px 4px 0", verticalAlign: "top" };
 
 // KENYAN WELL: per-row source badges (inline styles only)
-const SRC_COLORS: Record<string, string> = { BETIKA: "#2EE6A6", ODIBETS: "#A3E635", ESPN: "#38BDF8", MODEL: "#8B9BB4" };
+const SRC_COLORS: Record<string, string> = { BETIKA: "#2EE6A6", ODIBETS: "#A3E635", ESPN: "#38BDF8", MODEL: "#8B9BB4", BETEXPLORER: "#FBBF24" };
+
+// EDGE ENGINE item (e): qualified-bets gate + fractional Kelly staking.
+// A row qualifies when: edge_vs_model >= 2%, a book line exists, the model
+// output is trustworthy for betting (ensemble_kind model|derived), and the
+// fit has >= 8 sample games. Stake = 0.25 * full Kelly * bankroll (units).
+function kellyFraction(p: number, odds: number): number {
+  const b = odds - 1;
+  if (b <= 0) return 0;
+  return Math.max(0, (p * b - (1 - p)) / b);
+}
+function qualifiedPicks(rows: any[], bankroll: number) {
+  return (rows || [])
+    .filter((r: any) =>
+      r.book_odds != null &&
+      r.edge_vs_model != null && r.edge_vs_model >= 0.02 &&
+      (r.ensemble_kind === "model" || r.ensemble_kind === "derived") &&
+      typeof r.sample_games === "number" && r.sample_games >= 8 &&
+      typeof r.model_prob === "number")
+    .map((r: any) => ({ ...r, stake_units: Math.round(kellyFraction(r.model_prob, r.book_odds) * 0.25 * bankroll * 100) / 100 }))
+    .sort((a: any, b: any) => b.edge_vs_model - a.edge_vs_model);
+}
 function SourceBadge({ src }: { src?: string }) {
   const s = (src || "ESPN").toUpperCase();
   const col = SRC_COLORS[s] || "#8B9BB4";
@@ -166,9 +188,36 @@ export default function HunterScreen() {
     <div style={{ ...page, alignItems: "center", padding: "24px 16px" }}>
       <button onClick={() => setPhase("IDLE")}
         style={{ alignSelf: "flex-start", background: "transparent", border: "none", color: C.accent, fontFamily: MONO, cursor: "pointer", marginBottom: 16, fontSize: 14 }}>← NEW HUNT</button>
-      {(result.fixtures || []).map((fx: any) => (
+      {(result.fixtures || []).map((fx: any) => {
+        // EDGE ENGINE item (e): TOP PICKS card — only disciplined, qualified bets.
+        const bankroll = loadSettings().bankroll || 0;
+        const picks = qualifiedPicks(fx.top_edges, bankroll);
+        // 40-row cap, grouped by market (markets ordered by best edge inside).
+        const rowsAll = fx.top_edges || [];
+        const byMarket: Record<string, any[]> = {};
+        for (const r of rowsAll) { (byMarket[r.market] = byMarket[r.market] || []).push(r); }
+        const groups = Object.entries(byMarket)
+          .sort((a, b) => Math.max(...b[1].map((r: any) => r.edge_vs_model ?? -9)) -
+                          Math.max(...a[1].map((r: any) => r.edge_vs_model ?? -9)));
+        const shown: any[] = [];
+        for (const [, grp] of groups) { for (const r of grp) { if (shown.length < 40) shown.push(r); } }
+        return (
         <div key={fx.fixture_id} style={{ ...card, marginBottom: 32 }}>
           <h2 style={{ fontSize: 20, fontWeight: 700, margin: "0 0 4px" }}>{fx.home} @ {fx.away}</h2>
+          <div style={{ border: `1px solid ${picks.length ? C.green : C.border}`, borderRadius: 8, padding: "10px 12px", margin: "8px 0 10px", backgroundColor: "#0B0D12" }}>
+            <p style={{ fontFamily: MONO, fontSize: 12, letterSpacing: 2, color: picks.length ? C.green : C.muted, margin: "0 0 6px" }}>TOP PICKS — BANKROLL {bankroll}u · QUARTER-KELLY</p>
+            {picks.length === 0 ? (
+              <p style={{ color: "#6B7686", fontSize: 13, fontFamily: MONO, margin: 0 }}>No qualified bet today — discipline over gambling.</p>
+            ) : picks.map((p: any, i: number) => (
+              <p key={i} style={{ margin: "3px 0", fontSize: 13, fontFamily: MONO }}>
+                <SourceBadge src={p.source} />
+                <span style={{ color: C.text }}>{p.selection}</span>{" "}
+                <span style={{ color: C.muted }}>· {p.market} @ {p.book_odds}</span>{" "}
+                <span style={{ color: C.green }}>edge +{Math.round(p.edge_vs_model * 10000) / 100}%</span>{" "}
+                <span style={{ color: C.yellow, fontWeight: 700 }}>stake {p.stake_units}u</span>
+              </p>
+            ))}
+          </div>
           <p style={{ color: C.muted, fontFamily: MONO, fontSize: 13, margin: "0 0 4px" }}>
             {fx.sport} · {fx.league} · {fx.kickoff_utc} · {fx.markets_scanned} market lines scanned
             {fx.model_coverage ? (
@@ -198,7 +247,7 @@ export default function HunterScreen() {
           <table style={{ width: "100%", fontSize: 13, fontFamily: MONO, borderCollapse: "collapse" }}>
             <thead><tr><th style={th}>SELECTION</th><th style={th}>MARKET</th><th style={th}>BOOK</th><th style={th}>FAIR</th><th style={th}>HIT %</th><th style={th}>MODEL %</th><th style={th}>EDGE-vs-MODEL</th><th style={th}>EV %</th><th style={th}>KELLY</th></tr></thead>
             <tbody>
-              {(fx.top_edges || []).map((e: any, i: number) => (
+              {shown.map((e: any, i: number) => (
                 <tr key={i} style={{ borderTop: `1px solid ${C.borderSoft}` }}>
                   <td style={{ ...td, color: C.accent }}><SourceBadge src={e.source} />{e.selection}</td>
                   <td style={{ ...td, color: C.muted }}>{e.market}</td>
@@ -219,7 +268,8 @@ export default function HunterScreen() {
             <img key={d} src={d} alt="diagram" style={{ marginTop: 16, borderRadius: 8, border: `1px solid ${C.borderSoft}`, width: "100%", maxWidth: 672 }} />
           ))}
         </div>
-      ))}
+        );
+      })}
     </div>
   );
 }
