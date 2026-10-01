@@ -35,10 +35,13 @@ const td: React.CSSProperties = { padding: "4px 10px 4px 0", verticalAlign: "top
 // KENYAN WELL: per-row source badges (inline styles only)
 const SRC_COLORS: Record<string, string> = { BETIKA: "#2EE6A6", ODIBETS: "#A3E635", ESPN: "#38BDF8", MODEL: "#8B9BB4", BETEXPLORER: "#FBBF24" };
 
-// EDGE ENGINE item (e): qualified-bets gate + fractional Kelly staking.
-// A row qualifies when: edge_vs_model >= 2%, a book line exists, the model
-// output is trustworthy for betting (ensemble_kind model|derived), and the
-// fit has >= 8 sample games. Stake = 0.25 * full Kelly * bankroll (units).
+// EDGE ENGINE item (e) + SPEAK-UP(3): qualified-bets gate + fractional Kelly.
+// A row qualifies when: book line present AND odds >= 1.60 (owner refuses
+// sub-1.60 junk), edge_vs_model >= 2%, model_prob >= 0.35, the model output is
+// trustworthy for betting (ensemble_kind model|derived), and the fit has
+// >= 8 sample games. Stake = 0.25 * full Kelly * bankroll (units).
+const MIN_BOOK_ODDS = 1.60;
+const MIN_MODEL_PROB = 0.35;
 function kellyFraction(p: number, odds: number): number {
   const b = odds - 1;
   if (b <= 0) return 0;
@@ -47,12 +50,17 @@ function kellyFraction(p: number, odds: number): number {
 function qualifiedPicks(rows: any[], bankroll: number) {
   return (rows || [])
     .filter((r: any) =>
-      r.book_odds != null &&
+      r.book_odds != null && r.book_odds >= MIN_BOOK_ODDS &&
       r.edge_vs_model != null && r.edge_vs_model >= 0.02 &&
+      typeof r.model_prob === "number" && r.model_prob >= MIN_MODEL_PROB &&
       (r.ensemble_kind === "model" || r.ensemble_kind === "derived") &&
-      typeof r.sample_games === "number" && r.sample_games >= 8 &&
-      typeof r.model_prob === "number")
-    .map((r: any) => ({ ...r, stake_units: Math.round(kellyFraction(r.model_prob, r.book_odds) * 0.25 * bankroll * 100) / 100 }))
+      typeof r.sample_games === "number" && r.sample_games >= 8)
+    .map((r: any) => ({
+      ...r,
+      stake_units: Math.round(kellyFraction(r.model_prob, r.book_odds) * 0.25 * bankroll * 100) / 100,
+      implied_pct: Math.round((100 / r.book_odds) * 10) / 10,
+      model_pct: Math.round(r.model_prob * 1000) / 10,
+    }))
     .sort((a: any, b: any) => b.edge_vs_model - a.edge_vs_model);
 }
 function SourceBadge({ src }: { src?: string }) {
@@ -209,12 +217,15 @@ export default function HunterScreen() {
             {picks.length === 0 ? (
               <p style={{ color: "#6B7686", fontSize: 13, fontFamily: MONO, margin: 0 }}>No qualified bet today — discipline over gambling.</p>
             ) : picks.map((p: any, i: number) => (
-              <p key={i} style={{ margin: "3px 0", fontSize: 13, fontFamily: MONO }}>
-                <SourceBadge src={p.source} />
-                <span style={{ color: C.text }}>{p.selection}</span>{" "}
-                <span style={{ color: C.muted }}>· {p.market} @ {p.book_odds}</span>{" "}
-                <span style={{ color: C.green }}>edge +{Math.round(p.edge_vs_model * 10000) / 100}%</span>{" "}
-                <span style={{ color: C.yellow, fontWeight: 700 }}>stake {p.stake_units}u</span>
+              // SPEAK-UP(3): plain-English recommendation line.
+              <p key={i} style={{ margin: "4px 0", fontSize: 13, fontFamily: MONO, lineHeight: 1.5 }}>
+                <SourceBadge src={p.best_price_source || p.source} />
+                <span style={{ color: C.green, fontWeight: 700 }}>STAKE {p.stake_units}u</span>{" "}
+                <span style={{ color: C.text }}>on {p.selection}</span>{" "}
+                <span style={{ color: C.muted }}>({p.market}) @ {p.book_odds}</span>{" "}
+                <span style={{ color: C.muted }}>via {p.best_price_source || p.source}</span>{" "}
+                <span style={{ color: C.muted }}>— model {p.model_pct}% vs book {p.implied_pct}%,</span>{" "}
+                <span style={{ color: C.green }}>edge +{Math.round(p.edge_vs_model * 10000) / 100}%</span>
               </p>
             ))}
           </div>
