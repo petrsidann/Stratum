@@ -27,9 +27,23 @@ except Exception:  # ImportError or anything weird at load time
 
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
+# SPEAK-UP: mobile UA + iPhone viewport — Kenyan WAFs treat desktop headless
+# chromium on GitHub runner IPs as bots and drop the connection outright
+# (observed crash(nav): net::ERR_EMPTY_RESPONSE / ERR_CONNECTION_RESET).
+MOBILE_UA = ("Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) "
+             "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 "
+             "Mobile/15E148 Safari/604.1")
 
 BETIKA_URLS = ["https://www.betika.com/en-ke/", "https://www.betika.co.ke/"]
 ODIBETS_URLS = ["https://odibets.com/league/Soccer", "https://odibets.com/"]
+
+# SPEAK-UP: JSON XHR fallback endpoints (best-effort — probe statuses logged).
+# These are tried when HTML navigation is WAF-blocked or crashes.
+_JSON_FALLBACKS = {
+    "betika": ["https://www.betika.com/api/v1/sports-menus"],
+    "odibets": ["https://odibets.com/api/list",
+                "https://api.odibets.com/v1/matches/upcoming"],
+}
 
 _SOURCES = {
     "betika": {"urls": BETIKA_URLS, "tag": "BETIKA"},
@@ -205,8 +219,89 @@ def _expand_market_tabs(page):
     return clicked
 
 
+def _classify_nav_error(err_str):
+    """SPEAK-UP: map a raw playwright navigation exception to an honest status.
+    waf      -> TLS/HTTP-level blocks & connection resets (Kenyan WAF behaviour)
+    timeout  -> navigations that exceeded the budget
+    nav      -> everything else (DNS, crash, protocol errors)"""
+    en = (err_str or "").lower()
+    if "timeout" in en or "exceeded" in en:
+        return "waf" if ("403" in en or "cloudflare" in en) else "timeout"
+    if any(k in en for k in ("403", "429", "405", "cloudflare", "access denied",
+                             "forbidden")):
+        return "waf"
+    # connection reset / empty response / handshake failures == WAF fingerprinting
+    if any(k in en for k in ("empty response", "connection reset",
+                             "connection closed", "ssl", "tls",
+                             "certificate", "handshake", "net::err_",
+                             "target closed")):
+        return "waf"
+    return "nav"
+
+
+def _json_fallback(source_key, home, away, deadline):
+    """SPEAK-UP: when HTML nav is blocked, probe the book's JSON XHR endpoints
+    with plain urllib (mobile UA). Best-effort: returns (rows, status_or_None);
+    status None means 'fallback also failed, keep the HTML status'."""
+    import json as _json
+    import urllib.request as _ur
+    tag = _SOURCES[source_key]["tag"]
+    h, a = _norm(home), _norm(away)
+    best = None
+    for u in _JSON_FALLBACKS.get(source_key, []):
+        if time.time() > deadline:
+            break
+        try:
+            req = _ur.Request(u, headers={"User-Agent": MOBILE_UA,
+                                          "Accept": "application/json"})
+            with _ur.urlopen(req, timeout=10) as r:
+                ctype = (r.headers.get("Content-Type") or "")
+                body = r.read()
+            if "json" not in ctype.lower():
+                best = best or "html_not_json"
+                continue  # SPA fallback shell — not a real API
+            data = _json.loads(body.decode("utf-8", "replace"))
+        except Exception as e:
+            cls = _classify_nav_error(str(e))
+            best = {"waf": "waf", "timeout": "timeout"}.get(cls, "nav")
+            best = f"{best}:{u.split('/')[2]}"
+            continue
+        rows = []
+
+        def walk(node):
+            try:
+                if isinstance(node, dict):
+                    txt = _norm(json.dumps(list(node.values()))[:600]) \
+                        if node else ""
+                    if (h and a and h in txt and a in txt) or \
+                       (h and a and a in txt and h in txt):
+                        for v in node.values():
+                            ov = _valid_odd(v)
+                            if ov:
+                                rows.append({"market": "Main",
+                                             "selection": "?",
+                                             "decimal_odds": ov,
+                                             "source": tag})
+                    for v in node.values():
+                        walk(v)
+                elif isinstance(node, list):
+                    for v in node:
+                        walk(v)
+            except Exception:
+                pass
+        walk(data)
+        if rows:
+            return rows, f"ok({len(rows)}) [json-fallback]"
+        best = best or "json_no_fixture"
+    return [], None
+
+
 def _scout_one(source_key, home, away, deadline):
-    """Drive chromium for one source. Returns (rows, status)."""
+    """Drive chromium for one source. Returns (rows, status).
+    SPEAK-UP hardening: mobile UA + iPhone viewport, per-URL retry (one extra
+    attempt), longer nav budget, wait-for-selector on odds elements, and a
+    JSON XHR fallback when HTML nav looks WAF-blocked. Statuses distinguish
+    waf | timeout | nav."""
     cfg = _SOURCES[source_key]
     tag = cfg["tag"]
     if not _PLAYWRIGHT_OK:
@@ -221,37 +316,53 @@ def _scout_one(source_key, home, away, deadline):
                 "--no-sandbox", "--disable-dev-shm-usage",
                 "--disable-blink-features=AutomationControlled"])
             try:
-                ctx = browser.new_context(user_agent=UA, viewport={
-                    "width": 1366, "height": 900}, locale="en-GB")
-                ctx.set_default_timeout(15000)
+                ctx = browser.new_context(user_agent=MOBILE_UA, viewport={
+                    "width": 390, "height": 844}, locale="en-GB",
+                    is_mobile=True, has_touch=True)
+                ctx.set_default_timeout(20000)
                 page = ctx.new_page()
                 loaded = False
-                last_err = None
+                last_cls = "nav"
                 for url in cfg["urls"]:
-                    if time.time() >= deadline - 5:
+                    if time.time() >= deadline - 8:
                         break
-                    try:
-                        resp = page.goto(url, wait_until="domcontentloaded",
-                                         timeout=min(25000, max(5000, int((deadline - time.time()) * 1000))))
-                        if resp and resp.status() in (403, 405, 429):
-                            last_err = "blocked_by_waf"
-                            continue
-                        loaded = True
+                    for attempt in range(2):  # SPEAK-UP: one retry per URL
+                        if time.time() >= deadline - 8:
+                            break
+                        try:
+                            resp = page.goto(
+                                url, wait_until="domcontentloaded",
+                                timeout=min(45000,
+                                            max(10000, int((deadline - time.time()) * 1000))))
+                            if resp and resp.status() in (403, 405, 429, 521):
+                                last_cls = "waf"
+                                continue
+                            loaded = True
+                            break
+                        except Exception as e:
+                            last_cls = _classify_nav_error(str(e))
+                            if last_cls == "timeout":
+                                break  # no point retrying a dead clock
+                            time.sleep(1.5 + attempt)  # brief backoff, then retry
+                    if loaded:
                         break
-                    except Exception as e:
-                        en = str(e).lower()
-                        if "timeout" in en:
-                            last_err = "timeout"
-                        elif "403" in en or "cloudflare" in en or "access denied" in en:
-                            last_err = "blocked_by_waf"
-                        else:
-                            last_err = "crash(nav)"
                 if not loaded:
-                    return [], last_err or "crash(nav)"
+                    # SPEAK-UP: HTML nav blocked -> try JSON XHR fallback
+                    jrows, jstat = _json_fallback(source_key, home, away,
+                                                  deadline - 5)
+                    if jstat:
+                        return jrows, jstat
+                    return [], f"{last_cls} ({tag} html+json both failed)"
                 try:
-                    page.wait_for_timeout(3500)  # let the SPA hydrate
+                    # SPEAK-UP: wait for odds elements instead of a blind sleep
+                    page.wait_for_selector(
+                        "[class*='odd'], [class*='coef'], [data-odds], button",
+                        timeout=12000)
                 except Exception:
-                    pass
+                    try:
+                        page.wait_for_timeout(4000)  # SPA hydration grace
+                    except Exception:
+                        pass
                 _dismiss_cookie_banner(page)
                 el = _find_fixture_element(page, home, away)
                 if el is None:
@@ -291,10 +402,10 @@ def _scout_one(source_key, home, away, deadline):
                     pass
     except Exception as e:
         msg = re.sub(r"\s+", " ", str(e))[:60]
-        low = msg.lower()
-        if "timeout" in low or "exceeded" in low:
+        cls = _classify_nav_error(msg)
+        if cls == "timeout":
             return rows, "timeout"
-        return rows, f"crash({msg})"
+        return rows, f"crash({cls}:{msg})"
     if time.time() >= deadline and not rows:
         return [], "timeout"
     return rows, f"ok({len(rows)})"
