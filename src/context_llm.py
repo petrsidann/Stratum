@@ -275,6 +275,9 @@ def apply_adjustments(meta, adjustments):
         applied.append(a)
     out["lambda_home"] = round(lh, 3)
     out["lambda_away"] = round(la, 3)
+    out["_lh"], out["_la"] = lh, la          # EDGE ENGINE: price on adjusted rates
+    out["_ch"], out["_ca"] = float(cr.get("home", 5.0)), float(cr.get("away", 4.5))
+    out["_kh"], out["_kv"] = float(ka.get("home", 2.0)), float(ka.get("away", 2.5))
     out["corner_rates"] = cr
     out["card_rates"] = ka
     out["context_applied"] = applied

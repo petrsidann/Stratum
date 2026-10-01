@@ -699,7 +699,9 @@ def price_all_markets(lambda_home, lambda_away, corner_rates=None, card_rates=No
                       "half_scale": HALF_SCALE, "coverage": coverage,
                       "confidence": conf, "sample_games": 0,
                       "corner_rates": {"home": ch, "away": ca},
-                      "card_rates": {"home": kh, "away": kv}}
+                      "card_rates": {"home": kh, "away": kv},
+                      "_lh": lh, "_la": la, "_ch": ch, "_ca": ca,
+                      "_kh": kh, "_kv": kv}
     emit("Match Result (1X2)", "Home", ph)
     emit("Match Result (1X2)", "Draw", pd)
     emit("Match Result (1X2)", "Away", pa)
@@ -948,12 +950,101 @@ def price_all_markets(lambda_home, lambda_away, corner_rates=None, card_rates=No
                   "half_scale": HALF_SCALE, "coverage": coverage,
                   "confidence": conf, "sample_games": samp,
                   "corner_rates": {"home": ch, "away": ca},
-                  "card_rates": {"home": kh, "away": kv}}
+                  "card_rates": {"home": kh, "away": kv},
+                  "_lh": lh, "_la": la, "_ch": ch, "_ca": ca,
+                  "_kh": kh, "_kv": kv}
 
 
 # --------------------------------------------------------------------------
 # Convenience wrapper used by hunt_match.py
 # --------------------------------------------------------------------------
+
+def _event_rates_from_hist(hist, kind, default_rate):
+    """EDGE ENGINE: mean corners/cards per game from history (any role), else None."""
+    vals = [float(g[kind]) for g in (hist or {}).get("games") or []
+            if isinstance(g.get(kind), (int, float)) and g.get(kind) >= 0]
+    if len(vals) >= 3:
+        return sum(vals) / len(vals)
+    return default_rate
+
+
+def feature_prob_outcome(home_hist, away_hist, meta, wind_mph=None):
+    """EDGE ENGINE ensemble estimator #2: form-weighted logistic on features
+    (home/away goal rates, last-5 form, rest days, H2H last-5, wind).
+
+    stdlib-only; returns (p_home, p_draw, p_away) — never raises. With no
+    history it collapses to the Poisson λ's (honest degenerate case)."""
+    try:
+        lh = float(meta.get("lambda_home", 1.4))
+        la = float(meta.get("lambda_away", 1.1))
+        h_gf_h, h_ga_h, h_gf_a, h_ga_a, nh, _ = _split_means(
+            (home_hist or {}).get("games") or [])
+        a_gf_h, a_ga_h, a_gf_a, a_ga_a, _, na = _split_means(
+            (away_hist or {}).get("games") or [])
+        hf, ha_ = _form_weighted((home_hist or {}).get("games") or [])
+        af, aa = _form_weighted((away_hist or {}).get("games") or [])
+        r_h = meta.get("rest_days_home")
+        r_a = meta.get("rest_days_away")
+        x = [lh - la,
+             (hf - ha_) if hf is not None else 0.0,
+             (af - aa) if af is not None else 0.0,
+             ((h_gf_h or lh) - (a_ga_a or la)),
+             ((a_gf_a or la) - (h_ga_h or la)),
+             max(-2.0, min(2.0, ((r_h or 7) - (r_a or 7)) / 7.0)),
+             max(-1.5, min(1.5, ((wind_mph or 0.0) - 8.0) / 10.0))]
+        w = [1.15, 0.55, 0.45, 0.40, 0.35, 0.12, 0.05]
+        b = -0.25                                   # league home-edge baseline
+        z_home = b + sum(wi * xi for wi, xi in zip(w, x))
+        z_away = -z_home
+        p_h_raw = 1.0 / (1.0 + math.exp(-z_home))
+        p_a_raw = 1.0 / (1.0 + math.exp(-z_away))
+        # draw share anchored on the Poisson matrix draw probability
+        p_d = max(0.05, min(0.35, la and (1.0 - abs(p_h_raw - p_a_raw)) * 0.35 or 0.25))
+        p_d = max(0.06, min(0.32, p_d))
+        s = p_h_raw + p_a_raw
+        p_h = p_h_raw / s * (1.0 - p_d)
+        p_a = p_a_raw / s * (1.0 - p_d)
+        tot = p_h + p_d + p_a
+        return p_h / tot, p_d / tot, p_a / tot
+    except Exception:  # noqa: BLE001 — ensemble must never break a hunt
+        try:
+            mat = score_matrix(float(meta.get("lambda_home", 1.4)),
+                               float(meta.get("lambda_away", 1.1)), RHO, max_goals=10)
+            return p_home_win(mat), p_draw(mat), p_away_win(mat)
+        except Exception:  # noqa: BLE001
+            return None
+
+
+def blend_weights(calibration=None):
+    """Return (w_poisson, w_feature) from rolling calibration Briers.
+
+    Default 60/40 toward Poisson; shifts toward whichever estimator has the
+    better (lower) rolling Brier, clamped to [0.40, 0.75]."""
+    wp = 0.60
+    try:
+        cal = calibration or {}
+        bp = cal.get("brier_poisson")
+        bf = cal.get("brier_feature")
+        n = cal.get("graded_samples", 0)
+        if isinstance(bp, (int, float)) and isinstance(bf, (int, float)) and n >= 20:
+            # softmax-ish shift proportional to Brier advantage
+            wp = 0.60 + 3.0 * (bf - bp)
+            wp = max(0.40, min(0.75, wp))
+    except Exception:  # noqa: BLE001
+        pass
+    return round(wp, 3), round(1.0 - wp, 3)
+
+
+def load_calibration(path=None):
+    """Read data/calibration.json if present (never raises)."""
+    p = path or os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                             "..", "data", "calibration.json")
+    try:
+        with open(p, "r", encoding="utf-8") as fh:
+            return json.load(fh)
+    except Exception:  # noqa: BLE001
+        return {}
+
 
 def build_fixture_model(fixture, team_ids=None, mock_histories=None):
     """Full pipeline for one fixture: ingest → fit → price.
@@ -1007,7 +1098,216 @@ def build_fixture_model(fixture, team_ids=None, mock_histories=None):
         "h2h_dates": h2h_last5(home_hist.get("games"), away_hist.get("games")),
         "history_source": {"home": home_hist.get("source"), "away": away_hist.get("source")},
     })
+    _ensemble_pass(fixture, rows, meta, home_hist, away_hist)
     return rows, meta
+
+
+def _ensemble_pass(fixture, rows, meta, home_hist, away_hist, blended_override=None):
+    """EDGE ENGINE item (b), FIXED per ENSEMBLE DERIVED-PROB SPEC.
+
+    (bH,bD,bA) = blended 1X2 triple (sums to 1). Rules:
+      1. Pure 1X2-function markets (Full-Time Result, Double Chance, Draw No
+         Bet) are computed EXACTLY from the triple -> ensemble_kind "model".
+      2. Side-tied matrix markets (Asian/European Handicap, Winning Margin,
+         Team Totals, To Win To Nil, Clean Sheet, half/FT result families):
+         ratio = (covered-set sum of blended triple for that side) / (same
+         covered-set sum of Poisson triple); applied uniformly to every
+         selection in the market -> ensemble_kind "derived".
+      3. Non-side-tied matrix markets (O/U totals, BTTS, Correct Score,
+         corners, cards, multi-goal bands) keep the Poisson prob unchanged
+         -> ensemble_kind "poisson-only".
+    Grader/Brier/calibration score ONLY rows with ensemble_kind "model"."""
+    try:
+        # price on the FINAL (context-adjusted) lambdas when present
+        mat = score_matrix(meta.get("lambda_home"), meta.get("lambda_away"),
+                           RHO, max_goals=10)
+        pois = {"Home": p_home_win(mat), "Draw": p_draw(mat), "Away": p_away_win(mat)}
+        if blended_override:
+            # re-priced after context adjustments: reuse the SAME blended 1X2
+            # triple so every row keeps one consistent ensemble across re-pricings
+            bH, bD, bA = (float(blended_override[k]) for k in ("Home", "Draw", "Away"))
+            blended = {"Home": bH, "Draw": bD, "Away": bA}
+            meta["ensemble"] = {"w_poisson": None, "w_feature": None,
+                                "calibration_samples": None,
+                                "outcome_poisson": {k: round(v, 4) for k, v in pois.items()},
+                                "outcome_blended": {"Home": round(bH, 4),
+                                                    "Draw": round(bD, 4),
+                                                    "Away": round(bA, 4)},
+                                "note": "re-derived on adjusted lambdas"}
+        else:
+            feat = feature_prob_outcome(home_hist, away_hist, meta,
+                                        wind_mph=(fixture.get("weather_wind_mph")))
+            cal = load_calibration()
+            wp, wf = blend_weights(cal)
+            fdict = {"Home": feat[0], "Draw": feat[1], "Away": feat[2]} \
+                if feat else dict(pois)
+            bH = wp * pois["Home"] + wf * fdict["Home"]
+            bD = wp * pois["Draw"] + wf * fdict["Draw"]
+            bA = wp * pois["Away"] + wf * fdict["Away"]
+            tsum = bH + bD + bA or 1.0
+            bH, bD, bA = bH / tsum, bD / tsum, bA / tsum   # blended triple sums to 1
+            blended = {"Home": bH, "Draw": bD, "Away": bA}
+            meta["ensemble"] = {"w_poisson": wp, "w_feature": wf,
+                                "calibration_samples": int(cal.get("graded_samples", 0)),
+                                "outcome_poisson": {k: round(v, 4) for k, v in pois.items()},
+                                "outcome_feature": {k: round(v, 4) for k, v in fdict.items()},
+                                "outcome_blended": {"Home": round(bH, 4),
+                                                    "Draw": round(bD, 4),
+                                                    "Away": round(bA, 4)}}
+
+        def covered_sets(market_l, sel_l):
+            """Return the set of 1X2 outcomes a selection covers, plus its
+            family tag ('dc', 'dnb', 'ft') or None."""
+            s = sel_l.strip().lower()
+            m = market_l
+            if "full-time result" in m or "1x2" in m:
+                if s in ("home", "1"):
+                    return {"Home"}, "ft"
+                if s in ("draw", "x"):
+                    return {"Draw"}, "ft"
+                if s in ("away", "2"):
+                    return {"Away"}, "ft"
+                return None, None
+            if "double chance" in m or "undefeated" in m:
+                if s in ("home undefeated",):
+                    return {"Home", "Draw"}, "dc"
+                if s in ("away undefeated",):
+                    return {"Draw", "Away"}, "dc"
+                if s in ("1x", "home/draw", "home or draw"):
+                    return {"Home", "Draw"}, "dc"
+                if s in ("12", "home/away", "home or away", "no draw", "any winner"):
+                    return {"Home", "Away"}, "dc"
+                if s in ("x2", "draw/away", "draw or away"):
+                    return {"Draw", "Away"}, "dc"
+                return None, None
+            if "draw no bet" in m:
+                if "home" in s:
+                    return {"Home"}, "dnb"
+                if "away" in s:
+                    return {"Away"}, "dnb"
+                return None, None
+            return None, None
+
+        SIDE_WORDS = (("home", "Home"), ("away", "Away"), ("draw", "Draw"))
+        SIDE_TIED_FAMS = ("handicap", "winning margin", "win to nil", "clean sheet",
+                          "result after", "highest scoring half")
+        HALF_RESULT_FAMS = ("1st half result", "2nd half result",
+                            "half-time/full-time", "ht/ft", "result ht/ft")
+
+        def side_of(sel_l):
+            for w, k in SIDE_WORDS:
+                if w == "draw":
+                    if sel_l == "draw" or "draw" in sel_l and "home" not in sel_l \
+                            and "away" not in sel_l:
+                        return k
+                elif w in sel_l:
+                    return k
+            return None
+
+        for r in rows:
+            tn = (r.get("taxonomy_market") or "")
+            mk = ((r.get("market") or "") + " " + tn).lower()
+            sel = str(r.get("selection") or "")
+            sel_l = sel.strip().lower()
+            pp = r.get("model_prob")
+            fp = None
+            bp = None
+            kind = None
+            sets, fam = covered_sets(mk, sel_l)
+            if sets is not None and fam == "ft":
+                # Rule 2a: pure function of the triple
+                fp = blended[next(iter(sets))]
+                bp = fp
+                kind = "model"
+            elif sets is not None and fam == "dc":
+                # Rule 2: Double Chance = exact pairwise sum of blended triple
+                val = sum(blended[k] for k in sets)
+                fp = val
+                bp = val
+                kind = "model"
+            elif sets is not None and fam == "dnb":
+                # Rule 2: DNB renormalizes over the two winner outcomes
+                den = blended["Home"] + blended["Away"]
+                val = (blended[next(iter(sets))] / den) if den > 0 else pp
+                fp = val
+                bp = val
+                kind = "model"
+            elif any(t in mk for t in HALF_RESULT_FAMS) or \
+                    (("result" in mk) and ("half" in mk)):
+                # Rule 3: side-tied (halves / HT-FT families) -> covered-set ratio
+                side = side_of(sel_l)
+                if side:
+                    bset = {side}
+                    if "full-time" in mk or "ht/ft" in mk:
+                        pass  # HT-FT combos: use the named side only (approx)
+                    bs = sum(blended[k] for k in bset)
+                    ps = sum(pois[k] for k in bset) or 1e-9
+                    bp = max(0.0, min(0.999, (pp or 0.0) * (bs / ps)))
+                    kind = "derived"
+            elif any(t in mk for t in SIDE_TIED_FAMS) or \
+                    ("handicap" in mk) or ("margin" in mk) or \
+                    ("team total" in mk) or ("to nil" in mk) or ("clean sheet" in mk):
+                # Rule 3: side-tied matrix markets -> uniform covered-set ratio
+                side = side_of(sel_l)
+                # infer side from market name when selection lacks it
+                # (e.g. "Team Total Goals — Home Over 1.5")
+                if side is None:
+                    if "home" in mk.split("—")[0] or "home" in (r.get("market") or "").lower():
+                        side = "Home"
+                    elif "away" in mk.split("—")[0] or "away" in (r.get("market") or "").lower():
+                        side = "Away"
+                if side:
+                    bs = blended[side]
+                    ps = pois[side] or 1e-9
+                    bp = max(0.0, min(0.999, (pp or 0.0) * (bs / ps)))
+                    kind = "derived"
+                else:
+                    # non-side-tied instance of a side-tied family (e.g.
+                    # Winning Margin bands, No-Lead, minute-window Yes/No):
+                    # Rule 4 — keep Poisson prob unchanged
+                    bp = pp
+                    kind = "poisson-only"
+            else:
+                # Rule 4: non-side-tied -> Poisson prob unchanged
+                bp = pp
+                kind = "poisson-only"
+            if kind is None:
+                bp = pp
+                kind = "poisson-only"
+            r["poisson_prob"] = round(pp, 4) if pp is not None else None
+            r["feature_prob"] = round(fp, 4) if fp is not None else None
+            r["blended_prob"] = round(bp, 4) if bp is not None else None
+            r["ensemble_kind"] = kind
+    except Exception as e:  # noqa: BLE001 — ensemble must never break pricing
+        meta["ensemble"] = {"error": type(e).__name__}
+
+
+
+def reprice_with_context(base_rows, base_meta, adj_meta, blended_triple,
+                         home_hist=None, away_hist=None):
+    """EDGE ENGINE item (b): re-price all taxonomy markets on context-adjusted
+    lambdas/rates while keeping the SAME blended 1X2 triple from the original
+    ensemble pass (so poisson/feature/blended stay coherent per row).
+
+    Returns (rows, meta). Never raises — falls back to base rows on error."""
+    try:
+        lh = float(adj_meta.get("lambda_home", base_meta.get("lambda_home")))
+        la = float(adj_meta.get("lambda_away", base_meta.get("lambda_away")))
+        cr = adj_meta.get("corner_rates") or base_meta.get("corner_rates")
+        ka = adj_meta.get("card_rates") or base_meta.get("card_rates")
+        rows, meta = price_all_markets(lh, la, cr, ka,
+                                       league=base_meta.get("league"),
+                                       sample_games=base_meta.get("sample_games", 0))
+        meta.update({k: base_meta.get(k) for k in
+                     ("fit", "rest_days_home", "rest_days_away", "h2h_dates",
+                      "history_source", "coverage") if k in base_meta})
+        meta["context_applied"] = adj_meta.get("context_applied", [])
+        _ensemble_pass({"home": "", "away": ""}, rows, meta,
+                       home_hist or {"games": []}, away_hist or {"games": []},
+                       blended_override=blended_triple)
+        return rows, meta
+    except Exception:  # noqa: BLE001
+        return list(base_rows), dict(base_meta)
 
 
 if __name__ == "__main__":  # tiny smoke demo
