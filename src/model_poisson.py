@@ -1058,6 +1058,11 @@ def build_fixture_model(fixture, team_ids=None, mock_histories=None):
     """
     league = fixture.get("league") or "eng.1"
     sport, _ = _team_sport_league(fixture)
+    if (fixture.get("sport") or "").strip().lower() not in ("", "soccer", "football"):
+        # football-only pricing; other sports degrade honestly
+        return [], {"lambda_home": None, "lambda_away": None,
+                    "coverage": {"priced": 0, "denominator": 0},
+                    "sample_games": 0, "non_football": True}
     ids = team_ids or {}
     mh = mock_histories or {}
     if mh.get("home") is not None:

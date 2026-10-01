@@ -353,6 +353,11 @@ def merge_model_into_fixture(fx, tax_rows=None):
         return
     ctx = {"adjustments": [], "confidence": 0.0, "provider": "offline"}
     adj_rows = base_rows
+    if meta.get("non_football"):
+        # football-only pricing — nothing to fuse; keep book rows untouched
+        fx["model_status"] = "skipped_non_football"
+        fx["model_coverage"] = {"priced": 0, "denominator": 0}
+        return
     try:
         ctx = context_llm.get_context_adjustments(fx, meta)
         if ctx.get("adjustments"):
@@ -440,10 +445,15 @@ def merge_model_into_fixture(fx, tax_rows=None):
             row["model_fair_odds"] = mr.get("model_fair_odds")
             row["edge_vs_model"] = round(mp_ * float(row["book_odds"]) - 1.0, 4)
             row["model_confidence"] = mr.get("confidence")
+            # EDGE ENGINE item (e): propagate gate fields to book rows
+            row["sample_games"] = mr.get("sample_games")
+            row["ensemble_kind"] = mr.get("ensemble_kind")
             used.add((mr.get("taxonomy_market"), str(mr["selection"]).lower()))
         else:
             row.setdefault("model_prob", None)
             row.setdefault("edge_vs_model", None)
+            row.setdefault("sample_games", None)
+            row.setdefault("ensemble_kind", None)
 
     extra = []
     for r in adj_rows:
@@ -460,6 +470,9 @@ def merge_model_into_fixture(fx, tax_rows=None):
                       "confidence_score": int(max(1, min(99, round(
                           (r["model_prob"] or 0) * 100)))),
                       "kelly_stake_pct": 0.0, "model_confidence": r["confidence"],
+                      # EDGE ENGINE item (e): same gate fields on MODEL-ONLY rows
+                      "sample_games": r.get("sample_games"),
+                      "ensemble_kind": r.get("ensemble_kind"),
                       "all_prices": [], "best_price_source": None,
                       "reasoning_summary": "MODEL-ONLY (no line yet)",
                       "label": "MODEL-ONLY (no line yet)"})
