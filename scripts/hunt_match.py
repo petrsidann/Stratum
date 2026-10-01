@@ -161,20 +161,35 @@ def best_and_avg(vals):
 
 
 def add_rows(rows, market_name, sel_odds, prov_count):
-    sels = [s for s in sel_odds if sel_odds[s]]
+    """EDGE ENGINE item (d): multi-book. sel_odds maps selection -> list of
+    prices, each either a float or a (float, provider) tuple. Keeps ALL prices
+    per selection, uses the BEST for edge/Kelly, tags best_price_source."""
+    def split(v):
+        out = []
+        for x in v or []:
+            if isinstance(x, (list, tuple)):
+                if x and x[0]:
+                    out.append((float(x[0]), str(x[1] if len(x) > 1 else "ESPN")))
+            elif x:
+                out.append((float(x), "ESPN"))
+        return out
+    priced = {s: split(sel_odds.get(s)) for s in sel_odds}
+    sels = [s for s in priced if priced[s]]
     if len(sels) < 2:
         return
     avgs = {}
     for s in sels:
-        b, a = best_and_avg(sel_odds[s])
-        if not a:
-            return
-        avgs[s] = (b, a)
+        vals = [v for v, _ in priced[s]]
+        b = max(vals)
+        a = sum(vals) / len(vals)
+        # provider that offers the best price (first hit at max)
+        bs = next((pv for v, pv in priced[s] if v == b), "ESPN")
+        avgs[s] = (b, a, bs)
     implied_sum = sum(1 / avgs[s][1] for s in sels)
     if implied_sum <= 0:
         return
     for s in sels:
-        b, a = avgs[s]
+        b, a, bs = avgs[s]
         p = (1 / a) / implied_sum
         fair = 1 / p
         edge = (b / fair - 1) * 100
@@ -186,9 +201,12 @@ def add_rows(rows, market_name, sel_odds, prov_count):
                      "fair_odds": round(fair, 3), "ev_percent": round(edge, 2),
                      "confidence_score": int(max(1, min(99, round(p * 100)))),
                      "kelly_stake_pct": kelly, "source": "ESPN",
+                     "all_prices": [{"odds": v, "source": pv} for v, pv in priced[s]],
+                     "best_price_source": bs,
                      "reasoning_summary": (
                          f"{prov_count} provider(s); vig {round((implied_sum - 1) * 100, 1)}% removed; "
-                         f"consensus hit prob {round(p * 100, 1)}%; cross-book edge {round(edge, 2)}%.")})
+                         f"consensus hit prob {round(p * 100, 1)}%; cross-book edge {round(edge, 2)}% "
+                         f"(best price {b} @ {bs}).")})
 
 
 def _kenya_row_to_edge(r):
@@ -203,6 +221,8 @@ def _kenya_row_to_edge(r):
             "ev_percent": round((b / fair - 1) * 100, 2),
             "confidence_score": int(max(1, min(99, round(p * 100)))),
             "kelly_stake_pct": 0.0, "source": r.get("source") or "BETIKA",
+            "all_prices": [{"odds": b, "source": r.get("source") or "BETIKA"}],
+            "best_price_source": r.get("source") or "BETIKA",
             "reasoning_summary": f"{r.get('source') or 'BETIKA'} headless scrape; single-source line."}
 
 
@@ -212,6 +232,7 @@ def markets_for_comp(comp):
     for o in (comp.get("odds") or []):
         if not isinstance(o, dict):
             continue
+        _pv = ((o.get("provider") or {}).get("name") or "ESPN").strip().upper()
         h = o.get("homeTeamOdds") or {}
         a = o.get("awayTeamOdds") or {}
         d = o.get("drawOdds") or {}
@@ -226,12 +247,16 @@ def markets_for_comp(comp):
                       "away_sp": am_to_dec(a.get("spreadOdds")),
                       "total": o.get("overUnder"),
                       "over": am_to_dec(o.get("overOdds")),
-                      "under": am_to_dec(o.get("underOdds"))})
+                      "under": am_to_dec(o.get("underOdds")),
+                      "provider": _pv})
     if not provs:
         return rows
-    ml = {"home": [p["home_ml"] for p in provs], "away": [p["away_ml"] for p in provs]}
+    # EDGE ENGINE item (d): carry (odds, provider) pairs so add_rows keeps
+    # ALL prices per selection and tags the BEST one with its source.
+    ml = {"home": [(p["home_ml"], p["provider"]) for p in provs],
+          "away": [(p["away_ml"], p["provider"]) for p in provs]}
     if any(p["draw_ml"] for p in provs):
-        ml["draw"] = [p["draw_ml"] for p in provs]
+        ml["draw"] = [(p["draw_ml"], p["provider"]) for p in provs]
         add_rows(rows, "Match Winner (1X2)", ml, len(provs))
     else:
         add_rows(rows, "Moneyline", ml, len(provs))
@@ -243,14 +268,14 @@ def markets_for_comp(comp):
         except Exception:
             line_s = str(line)
         add_rows(rows, f"Spread / Handicap ({line_s})",
-                 {f"Home {line_s}": [p["home_sp"] for p in sp],
-                  f"Away {line_s}": [p["away_sp"] for p in sp]}, len(sp))
+                 {f"Home {line_s}": [(p["home_sp"], p["provider"]) for p in sp],
+                  f"Away {line_s}": [(p["away_sp"], p["provider"]) for p in sp]}, len(sp))
     tot = [p for p in provs if p["total"] and p["over"] and p["under"]]
     if tot:
         line = tot[0]["total"]
         add_rows(rows, f"Total Over/Under ({line})",
-                 {f"Over {line}": [p["over"] for p in tot],
-                  f"Under {line}": [p["under"] for p in tot]}, len(tot))
+                 {f"Over {line}": [(p["over"], p["provider"]) for p in tot],
+                  f"Under {line}": [(p["under"], p["provider"]) for p in tot]}, len(tot))
     return rows
 
 
@@ -435,6 +460,7 @@ def merge_model_into_fixture(fx, tax_rows=None):
                       "confidence_score": int(max(1, min(99, round(
                           (r["model_prob"] or 0) * 100)))),
                       "kelly_stake_pct": 0.0, "model_confidence": r["confidence"],
+                      "all_prices": [], "best_price_source": None,
                       "reasoning_summary": "MODEL-ONLY (no line yet)",
                       "label": "MODEL-ONLY (no line yet)"})
     fx["model_only_count"] = len(extra)
