@@ -1,9 +1,9 @@
 {
-  "hunt_id": "hmuplrtvjtj3o7",
+  "hunt_id": "hmupnyzewuikmz",
   "status": "complete",
   "stage": "DONE",
   "progress": 1.0,
-  "generated_at_utc": "2026-10-01T14:02:39.214828+00:00",
+  "generated_at_utc": "2026-10-01T15:08:14.910839+00:00",
   "fixtures": [
     {
       "fixture_id": "401861096",
@@ -321,8 +321,8 @@
       ],
       "diagrams": [],
       "kenya_status": {
-        "BETIKA": "crash(nav)",
-        "ODIBETS": "crash(nav)"
+        "BETIKA": "waf (BETIKA html+json both failed)",
+        "ODIBETS": "nav (ODIBETS html+json both failed)"
       },
       "model_coverage": {
         "priced": 2,
@@ -986,8 +986,8 @@
         ],
         "diagrams": [],
         "kenya_status": {
-          "BETIKA": "crash(nav)",
-          "ODIBETS": "crash(nav)"
+          "BETIKA": "waf (BETIKA html+json both failed)",
+          "ODIBETS": "nav (ODIBETS html+json both failed)"
         },
         "model_coverage": {
           "priced": 2,
