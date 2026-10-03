@@ -1,20 +1,20 @@
 {
-  "hunt_id": "hmupnyzewuikmz",
+  "hunt_id": "hmurtlklm6jyxp",
   "status": "complete",
   "stage": "DONE",
   "progress": 1.0,
-  "generated_at_utc": "2026-10-01T15:08:14.910839+00:00",
+  "generated_at_utc": "2026-10-03T03:17:45.377883+00:00",
   "fixtures": [
     {
-      "fixture_id": "401861096",
-      "home": "Denmark",
-      "away": "Portugal",
+      "fixture_id": "401861113",
+      "home": "Croatia",
+      "away": "England",
       "sport": "soccer",
       "league": "uefa.nations",
-      "kickoff_utc": "2026-10-01T18:45Z",
+      "kickoff_utc": "2026-10-03T16:00Z",
       "team_ids": {
-        "home": "479",
-        "away": "482"
+        "home": "477",
+        "away": "448"
       },
       "markets_scanned": 15,
       "top_edges": [
@@ -655,31 +655,31 @@
     "hockey/nhl": "no_fixture_in_board"
   },
   "available_today": [
-    "Seattle Sounders FC vs Sporting Kansas City",
-    "Azerbaijan vs Liechtenstein",
-    "Denmark vs Portugal",
-    "Germany vs Serbia",
-    "Greece vs Netherlands",
-    "Israel vs Kosovo",
-    "Malta vs Gibraltar",
-    "Republic of Ireland vs Austria",
-    "Wales vs Norway",
-    "Maldives vs Lebanon",
-    "Uzbekistan vs Syria",
-    "Cleveland Browns vs Pittsburgh Steelers"
+    "Finland vs Albania",
+    "Belarus vs San Marino",
+    "Croatia vs England",
+    "Estonia vs Luxembourg",
+    "Iceland vs Bulgaria",
+    "North Macedonia vs Scotland",
+    "Spain vs Czechia",
+    "Switzerland vs Slovenia",
+    "Fiji vs Vanuatu",
+    "Sri Lanka vs Djibouti",
+    "India vs Brazil",
+    "Russia vs Namibia"
   ],
   "result": {
     "fixtures": [
       {
-        "fixture_id": "401861096",
-        "home": "Denmark",
-        "away": "Portugal",
+        "fixture_id": "401861113",
+        "home": "Croatia",
+        "away": "England",
         "sport": "soccer",
         "league": "uefa.nations",
-        "kickoff_utc": "2026-10-01T18:45Z",
+        "kickoff_utc": "2026-10-03T16:00Z",
         "team_ids": {
-          "home": "479",
-          "away": "482"
+          "home": "477",
+          "away": "448"
         },
         "markets_scanned": 15,
         "top_edges": [
@@ -1320,18 +1320,18 @@
       "hockey/nhl": "no_fixture_in_board"
     },
     "available_today": [
-      "Seattle Sounders FC vs Sporting Kansas City",
-      "Azerbaijan vs Liechtenstein",
-      "Denmark vs Portugal",
-      "Germany vs Serbia",
-      "Greece vs Netherlands",
-      "Israel vs Kosovo",
-      "Malta vs Gibraltar",
-      "Republic of Ireland vs Austria",
-      "Wales vs Norway",
-      "Maldives vs Lebanon",
-      "Uzbekistan vs Syria",
-      "Cleveland Browns vs Pittsburgh Steelers"
+      "Finland vs Albania",
+      "Belarus vs San Marino",
+      "Croatia vs England",
+      "Estonia vs Luxembourg",
+      "Iceland vs Bulgaria",
+      "North Macedonia vs Scotland",
+      "Spain vs Czechia",
+      "Switzerland vs Slovenia",
+      "Fiji vs Vanuatu",
+      "Sri Lanka vs Djibouti",
+      "India vs Brazil",
+      "Russia vs Namibia"
     ]
   }
 }
