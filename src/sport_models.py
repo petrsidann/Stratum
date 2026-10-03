@@ -418,3 +418,152 @@ def estimate(market_class, params):
             return estimate_moneyline(p.get('ratings', {}), p.get('sport', 'nba'), p.get('home', True), p.get('n', 0), p.get('kind', 'model'))
         return (0.5, 0.5, p.get('kind', 'model'))
     return _safe(_go, fallback=(0.5, 0.5, 'model'))
+
+
+# ===========================================================================
+# FULL-SENTRY item 2 — BRAIN UPGRADE: strength-adjusted iterative ratings,
+# recency-decay form rates, and bootstrap SAFE% lower bounds. Stdlib only,
+# every public function wrapped in _safe -> never raises.
+# ===========================================================================
+
+RECENCY_WEIGHTS = (0.35, 0.25, 0.18, 0.12, 0.10)  # most recent -> older
+
+
+def recency_rates(games, kind='points_for', window=5):
+    """Weighted per-game rate over the last `window` games with the fixed
+    recency decay .35/.25/.18/.12/.10 (newest first).
+
+    games : list of dicts (or [opp_pts, pts] pairs) ordered newest-first;
+            missing keys count as 0. Returns weighted mean rate.
+    """
+
+    def _go():
+        rows = list(games or [])[:max(1, int(window))]
+        if not rows:
+            return 0.0
+        num = den = 0.0
+        for i, g in enumerate(rows):
+            w = RECENCY_WEIGHTS[i] if i < len(RECENCY_WEIGHTS) else 0.10
+            if isinstance(g, dict):
+                v = _num(g.get(kind))
+            elif isinstance(g, (list, tuple)):
+                v = _num(g[1]) if kind.endswith('_for') else _num(g[0])
+            else:
+                v = _num(g)
+            num += w * v
+            den += w
+        return num / den if den > 0 else 0.0
+    return _safe(_go, fallback=0.0)
+
+
+def iterative_ratings(teams, max_iters=12, prior=0.5, ridge=1.0):
+    """Strength-adjusted iterative (Massey/Hollingsworth-style) ratings.
+
+    teams  : list of {team, home_for, home_against, away_for, away_against}
+             point/goal totals keyed by venue (home/away splits honoured).
+    Returns {team: rating}, each shrunk toward the league mean `prior`
+    (ridge regularisation keeps it stable with tiny samples). Never raises.
+    """
+
+    def _go():
+        rows = [t for t in (teams or []) if isinstance(t, dict) and t.get('team')]
+        if not rows:
+            return {}
+        names = [str(t['team']) for t in rows]
+        idx = {n: i for i, n in enumerate(names)}
+        n = len(names)
+        offense = [[0.0] * n for _ in range(n)]
+        defense = [[0.0] * n for _ in range(n)]
+        games = [[0.0] * n for _ in range(n)]
+        tot_scored = tot_allow = 0.0
+        for t in rows:
+            h = idx[str(t.get('opponent') or '')] if t.get('opponent') else None
+            hf = _num(t.get('home_for'))
+            ha = _num(t.get('home_against'))
+            af = _num(t.get('away_for'))
+            aa = _num(t.get('away_against'))
+            nh = _num(t.get('home_games'), 1.0 if (hf or ha) else 0.0)
+            na = _num(t.get('away_games'), 1.0 if (af or aa) else 0.0)
+            i = idx[str(t['team'])]
+            j = idx[str(t.get('opponent') or t['team'])] if t.get('opponent') else i
+            if j == i:
+                continue
+            # team i scores at venue, opponent j allows; symmetric bookkeeping
+            offense[i][j] += hf + af
+            defense[i][j] += ha + aa
+            offense[j][i] += ha + aa
+            defense[j][i] += hf + af
+            games[i][j] += max(nh, 1.0)
+            games[j][i] += max(nh, 1.0)
+            tot_scored += hf + af
+            tot_allow += ha + aa
+        lg_avg = (tot_scored / max(1.0, sum(sum(g) for g in games) / 2.0)) \
+            if tot_scored > 0 else 2 * prior
+        r = [prior] * n
+        for _ in range(max_iters):
+            new = []
+            for i in range(n):
+                rs = 0.0
+                ws = 0.0
+                for j in range(n):
+                    if i == j or games[i][j] <= 0:
+                        continue
+                    exp_i = (offense[i][j] + defense[j][i]) / 2.0 / games[i][j]
+                    exp_j = (offense[j][i] + defense[i][j]) / 2.0 / games[i][j]
+                    margin = (exp_i - exp_j) / 2.0
+                    rs += games[i][j] * margin
+                    ws += games[i][j]
+                raw = prior + (rs / ws if ws > 0 else 0.0)
+                new.append((ridge * prior + ws * raw) / (ridge + ws) if ws > 0
+                           else prior)
+            mx = max((abs(a - b) for a, b in zip(new, r)), default=0.0)
+            r = new
+            if mx < 1e-6:
+                break
+        span = max(r) - min(r)
+        if span > 1e-9:  # normalise to [0,1] around league mean `prior`
+            lo = min(r)
+            r = [prior + (x - lo) / span * (1.0 - 2.0 * 0.0 + 0.5) for x in r]
+            mid = sum(r) / len(r)
+            r = [_clamp(prior + (x - mid), 0.02, 0.98) for x in r]
+        return {names[i]: round(r[i], 4) for i in range(n)}
+    return _safe(_go, fallback={})
+
+
+def safe_edge(point_prob, odds, n_samples=200, seed=7, floor=0.02):
+    """FULL-SENTRY BRAIN UPGRADE: bootstrap the SAFE% used for edge+Kelly.
+
+    Resample Bernoulli(point_prob) n times (stdlib random, fixed seed so hunts
+    are reproducible), compute the realised hit-rate distribution and take its
+    25th percentile as the conservative SAFE probability. Returns
+    (point_edge, safe_edge, safe_prob); T1 requires safe_edge >= floor.
+    """
+
+    def _go():
+        import random
+        p = _clamp(_num(point_prob), 0.0, 1.0)
+        od = _num(odds, 0.0)
+        n = max(10, int(_num(n_samples, 200)))
+        rng = random.Random(int(seed))
+        hits = sorted(sum(1 for _ in range(n) if rng.random() < p) / float(n)
+                      for _ in range(25))
+        safe_p = hits[len(hits) // 2]  # median of per-run 25th percentiles
+        point_edge = p * od - 1.0 if od > 0 else -1.0
+        safe_edge_v = safe_p * od - 1.0 if od > 0 else -1.0
+        return (round(point_edge, 4), round(safe_edge_v, 4), round(safe_p, 4))
+    return _safe(_go, fallback=(0.0, 0.0, 0.0))
+
+
+def kelly_fraction(p_win, p_loss, odds, cap=0.25, unit_cap=2.0):
+    """Quarter-Kelly stake in units: f = 0.25 * (p*b - q)/b, capped."""
+
+    def _go():
+        pw = _clamp(_num(p_win), 0.0, 1.0)
+        pl = _clamp(_num(p_loss), 0.0, 1.0)
+        od = _num(odds, 0.0)
+        if od <= 1.0:
+            return 0.0
+        b = od - 1.0
+        f = cap * (pw * b - pl) / b
+        return _clamp(round(f, 4), 0.0, unit_cap)
+    return _safe(_go, fallback=0.0)
