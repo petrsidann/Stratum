@@ -228,6 +228,229 @@ MARKET_CLASSES = {
         "gates": gate(form=0.85, average=0.0, model_floor=0.78,
                       odds_floor=1.18, edge_floor=0.02),
     },
+    # =====================================================================
+    # FULL-SENTRY item 2 — LOGIC MODULES v2 (soccer + cross-sport winners)
+    # =====================================================================
+    "soccer_dc_cushion": {
+        "sports": ("soccer",),
+        "taxonomy": ("Double Chance",),
+        "selection": "double_chance",
+        "logic": "dc",
+        "blueprint": "Double-Chance cushion: blended triple pairwise sum, "
+                     "price only when model >= 0.85.",
+        "gates": gate(form=0.85, average=0.0, model_floor=0.85,
+                      odds_floor=1.15, edge_floor=0.02),
+    },
+    "soccer_dnb": {
+        "sports": ("soccer",),
+        "taxonomy": ("Draw No Bet",),
+        "selection": "draw_no_bet",
+        "logic": "dnb",
+        "push": True,
+        "blueprint": "Draw-No-Bet: home/away leg with draw mass refunded; "
+                     "model >= 0.75 on the refund-adjusted prob.",
+        "gates": gate(form=0.85, average=0.0, model_floor=0.75,
+                      odds_floor=1.16, edge_floor=0.02),
+    },
+    "soccer_btts_yes": {
+        "sports": ("soccer",),
+        "taxonomy": ("Both Teams to Score (BTTS)",),
+        "selection": "btts_yes",
+        "logic": "btts_yes",
+        "form_min_scored": 4,   # both teams scored in >= 4 of last 5
+        "blueprint": "BTTS-Yes: form-gated (both sides scored >=4/5) then "
+                     "priced independently (1-e^-lh)(1-e^-la).",
+        "gates": gate(form=0.80, average=0.0, model_floor=0.72,
+                      odds_floor=1.15, edge_floor=0.02),
+    },
+    "soccer_btts_no": {
+        "sports": ("soccer",),
+        "taxonomy": ("Both Teams to Score (BTTS)",),
+        "selection": "btts_no",
+        "logic": "btts_no",
+        "form_shutouts": 3,     # at least one side kept out >= 3 of last 5
+        "blueprint": "BTTS-No: form-gated (one shut-out >=3/5); price = "
+                     "1 - (1-e^-lh)(1-e^-la) with Dixon-Coles rho correction.",
+        "gates": gate(form=0.80, average=0.0, model_floor=0.75,
+                      odds_floor=1.16, edge_floor=0.02),
+    },
+    "soccer_team_to_score": {
+        "sports": ("soccer",),
+        "taxonomy": ("Team to Score (Anytime Goal Scorer Team)", "Team Total Goals (Over/Under)"),
+        "selection": "team_scores_any",
+        "logic": "team_score",
+        "blueprint": "Team-to-Score: 1-e^-lambda vs book; model >= 0.85 only.",
+        "gates": gate(form=0.85, average=0.0, model_floor=0.85,
+                      odds_floor=1.15, edge_floor=0.02),
+    },
+    "soccer_first_half_over05": {
+        "sports": ("soccer",),
+        "taxonomy": ("1st Half Over/Under Total Goals",),
+        "selection": "ht_over_0.5",
+        "logic": "half_total",
+        "line": 0.5,
+        "blueprint": "1st-Half Over 0.5 on half-lambdas (half_scale split).",
+        "gates": gate(form=0.80, average=0.0, model_floor=0.78,
+                      odds_floor=1.15, edge_floor=0.02),
+    },
+    "soccer_first_half_under25": {
+        "sports": ("soccer",),
+        "taxonomy": ("1st Half Over/Under Total Goals",),
+        "selection": "ht_under_2.5",
+        "logic": "half_total",
+        "line": 2.5,
+        "blueprint": "1st-Half Under 2.5 on half-lambdas.",
+        "gates": gate(form=0.80, average=0.0, model_floor=0.85,
+                      odds_floor=1.16, edge_floor=0.02),
+    },
+    "soccer_extreme_cushions": {
+        "sports": ("soccer",),
+        "taxonomy": ("Over/Under Total Goals (0.5, 1.5, 2.5, 3.5, 4.5, 5.5)",),
+        "selection": "over_0.5_or_under_5.5",
+        "logic": "extreme",
+        "blueprint": "Cushion extremes O0.5 / U5.5: ONLY if model >= 0.90 "
+                     "AND odds >= 1.15 (double-key hard gate).",
+        "hard_model_floor": 0.90, "hard_odds_floor": 1.15,
+        "gates": gate(form=0.85, average=0.0, model_floor=0.90,
+                      odds_floor=1.15, edge_floor=0.02),
+    },
+    "bb_ml_favorite": {
+        "sports": ("basketball", "nba"),
+        "taxonomy": ("Moneyline (Match Winner)",),
+        "selection": "moneyline_fav",
+        "logic": "ml",
+        "blueprint": "BB money-line favourite from margin model; >= 0.78.",
+        "gates": gate(form=0.80, average=0.0, model_floor=0.78,
+                      odds_floor=1.18, edge_floor=0.02),
+    },
+    "bb_alt_total_cushion_under": {
+        "sports": ("basketball", "nba"),
+        "taxonomy": ("Alternative Totals",),
+        "selection": "alt_total_under",
+        "cushion": 6.0,
+        "blueprint": "Alt-total cushion UNDER side: line >= model+6.",
+        "gates": gate(form=0.80, average=6.0, model_floor=0.82,
+                      odds_floor=1.18, edge_floor=0.02),
+    },
+    "bb_first_half_total": {
+        "sports": ("basketball", "nba"),
+        "taxonomy": ("1st Half Total Points",),
+        "selection": "first_half_total",
+        "cushion": 3.0,
+        "blueprint": "BB 1H total cushion vs half-scaled model total.",
+        "gates": gate(form=0.75, average=3.0, model_floor=0.78,
+                      odds_floor=1.15, edge_floor=0.02),
+    },
+    "nfl_ml_favorite": {
+        "sports": ("nfl", "football", "american_football"),
+        "taxonomy": ("Moneyline (Game Winner)",),
+        "selection": "moneyline_fav",
+        "logic": "ml",
+        "blueprint": "NFL money-line favourite (incl. OT as loss); >= 0.78.",
+        "gates": gate(form=0.80, average=0.0, model_floor=0.78,
+                      odds_floor=1.18, edge_floor=0.02),
+    },
+    "nfl_under_cushion": {
+        "sports": ("nfl", "football", "american_football"),
+        "taxonomy": ("Total Points Over/Under", "Alternative Total Points"),
+        "selection": "under",
+        "cushion": 6.0,
+        "blueprint": "NFL Under cushion: model_total <= line - 6 points.",
+        "gates": gate(form=0.80, average=6.0, model_floor=0.80,
+                      odds_floor=1.16, edge_floor=0.02),
+    },
+    "mlb_underdog_runline": {
+        "sports": ("mlb", "baseball"),
+        "taxonomy": ("Run Line (Handicap)", "Alternative Run Lines"),
+        "selection": "runline_plus_2.5",
+        "logic": "runline",
+        "cushion": 1.5,
+        "blueprint": "MLB underdog run-line +2.5: cover prob via margin "
+                     "lattice; cushion vs model margin >= 1.5.",
+        "gates": gate(form=0.80, average=1.5, model_floor=0.80,
+                      odds_floor=1.18, edge_floor=0.02),
+    },
+    "mlb_under_cushion": {
+        "sports": ("mlb", "baseball"),
+        "taxonomy": ("Total Runs Over/Under", "5-Innings Total Runs"),
+        "selection": "under",
+        "cushion": 2.0,
+        "blueprint": "MLB Under total cushion >= 2 runs vs shrunk lambdas.",
+        "gates": gate(form=0.80, average=2.0, model_floor=0.80,
+                      odds_floor=1.16, edge_floor=0.02),
+    },
+    "mlb_ml_favorite": {
+        "sports": ("mlb", "baseball"),
+        "taxonomy": ("Moneyline (Game Winner)",),
+        "selection": "moneyline_fav",
+        "logic": "ml",
+        "blueprint": "MLB money-line favourite; floor 0.68 (thin edges).",
+        "gates": gate(form=0.80, average=0.0, model_floor=0.68,
+                      odds_floor=1.15, edge_floor=0.02),
+    },
+    "nhl_ml_incl_ot": {
+        "sports": ("nhl", "hockey"),
+        "taxonomy": ("Moneyline (Inc. Overtime/Shootout)",),
+        "selection": "moneyline_fav",
+        "logic": "ml",
+        "blueprint": "NHL ML incl. OT from 3-way Poisson matrix; >= 0.68.",
+        "gates": gate(form=0.80, average=0.0, model_floor=0.68,
+                      odds_floor=1.15, edge_floor=0.02),
+    },
+    "nhl_btts_yes": {
+        "sports": ("nhl", "hockey"),
+        "taxonomy": ("Both Teams to Score (Yes/No)",),
+        "selection": "btts_yes",
+        "logic": "btts_yes",
+        "form_min_scored": 3,
+        "blueprint": "NHL BTTS-Yes: both teams score >=1 goal; form gate "
+                     "(both scored >=3/5) then (1-e^-lh)(1-e^-la).",
+        "gates": gate(form=0.80, average=0.0, model_floor=0.70,
+                      odds_floor=1.15, edge_floor=0.02),
+    },
+    "tennis_ml_favorite": {
+        "sports": ("tennis",),
+        "taxonomy": ("Match Winner (Moneyline)",),
+        "selection": "moneyline_fav",
+        "logic": "ml",
+        "requires_espn_history": True,
+        "blueprint": "Tennis ML favourite; >= 0.80 and only with fixture "
+                     "history (else grey).",
+        "gates": gate(form=0.90, average=0.0, model_floor=0.80,
+                      odds_floor=1.18, edge_floor=0.02),
+    },
+    "tennis_set_handicap": {
+        "sports": ("tennis",),
+        "taxonomy": ("Set Handicap", "Games Handicap"),
+        "selection": "games_hcp_plus_3.5",
+        "logic": "handicap",
+        "cushion": 3.5,
+        "blueprint": "Set/games handicap +3.5 cushion vs model expected "
+                     "games margin.",
+        "gates": gate(form=0.85, average=3.5, model_floor=0.78,
+                      odds_floor=1.16, edge_floor=0.02),
+    },
+    "rugby_handicap_cushion": {
+        "sports": ("rugby", "rugby_union", "rugby_league"),
+        "taxonomy": ("Alternative Handicaps", "Point Spread (Handicap)"),
+        "selection": "alt_spread",
+        "cushion": 10.0,
+        "blueprint": "Rugby handicap cushion >= 10 vs normal-margin model "
+                     "(sigma 12); ESPN history required.",
+        "requires_espn_history": True,
+        "gates": gate(form=0.85, average=10.0, model_floor=0.80,
+                      odds_floor=1.18, edge_floor=0.02),
+    },
+    "rugby_total_under_cushion": {
+        "sports": ("rugby", "rugby_union", "rugby_league"),
+        "taxonomy": ("Alternative Total Points", "Total Points Over/Under"),
+        "selection": "under",
+        "cushion": 6.0,
+        "blueprint": "Rugby total-points Under cushion >= 6 vs model sum.",
+        "requires_espn_history": True,
+        "gates": gate(form=0.85, average=6.0, model_floor=0.80,
+                      odds_floor=1.16, edge_floor=0.02),
+    },
     # ---------------- GREY (never priced) ---------------------------------
     "grey_needs_data": {
         "sports": ("cricket", "golf", "motorsports", "darts", "esports", "mma"),
@@ -414,8 +637,18 @@ def check_gates(class_key, features, thresholds=None):
         if cls.get("grey"):
             return False, ["grey: needs data source"]
         g = get_gates(class_key, thresholds)
-        # form: last-5 consistency of the relevant rate
-        fs = _numf(features.get("form_std"), 99.0)
+        # form: last-5 consistency of the relevant rate. When the caller
+        # supplies a pre-checked boolean form flag (logic modules pass
+        # btts_form_ok / team_score_form_ok after their own >=4-of-5 style
+        # checks), that flag IS the form gate; otherwise fall back to the
+        # rate-std ceiling and treat a missing std as "no data" -> fail.
+        if features.get("form_flag") is not None:
+            if not bool(features.get("form_flag")):
+                ok = False
+                reasons.append("form flag false")
+            fs = _numf(features.get("form_std"), 0.0)
+        else:
+            fs = _numf(features.get("form_std"), 99.0)
         form_limit = (1.0 - float(g["form"])) * _numf(features.get("rate_scale"), 1.0) \
                      + 0.05
         if fs > max(0.15, form_limit):
@@ -453,6 +686,20 @@ def check_gates(class_key, features, thresholds=None):
         if edge < float(g["edge_floor"]):
             ok = False
             reasons.append(f"edge {edge:.3f} < floor {g['edge_floor']:.3f}")
+        # LOGIC MODULES v2: sample_games >= 8 meta-gate
+        sg = _numf(features.get("sample_games"), 8.0)
+        if sg < 8.0:
+            ok = False
+            reasons.append(f"sample_games {sg:.0f} < 8")
+        # cushion extremes double-key hard gate (model>=0.90 AND odds>=1.15)
+        if cls.get("hard_model_floor") is not None:
+            if mp < float(cls["hard_model_floor"]) or od < float(cls["hard_odds_floor"]):
+                ok = False
+                reasons.append("extreme double-key: need model>=0.90 AND odds>=1.15")
+        # ESPN-history-required classes grey out without fixture history
+        if cls.get("requires_espn_history") and not features.get("espn_history"):
+            ok = False
+            reasons.append("grey: needs ESPN fixture history")
     except Exception as e:
         return False, [f"gate-error:{type(e).__name__}"]
     return ok, reasons
@@ -525,6 +772,284 @@ def price_selection(class_key, params, thresholds=None):
     except Exception as e:
         log(f"price_selection {class_key} failed: {type(e).__name__}")
         return None
+
+
+
+# ---------------------------------------------------------------------------
+# FULL-SENTRY item 2 — LOGIC MODULES v2 pricing engines.
+# Every module returns (p_eff, p_loss, ensemble_kind) exactly like the
+# sport_models estimators; form gates read features btts_form_* / scored_n.
+# ---------------------------------------------------------------------------
+
+import math as _math
+
+
+def _exp1m(lam):
+    """P(at least one event) for a Poisson rate: 1 - e^-lam."""
+    try:
+        return 1.0 - _math.exp(-max(0.0, float(lam)))
+    except Exception:
+        return 0.0
+
+
+def logic_dc(triple, side="home"):
+    """Double-Chance cushion: exact pairwise sum of the blended 1X2 triple.
+    side: home(1X) / away(X2) / no_draw(12). Returns (p_eff,p_loss,'model')."""
+    def _go():
+        t = triple or {}
+        h = _numf(t.get("Home") or t.get("home"), 0.0)
+        d = _numf(t.get("Draw") or t.get("draw"), 0.0)
+        a = _numf(t.get("Away") or t.get("away"), 0.0)
+        if str(side).startswith("a"):
+            p = d + a
+        elif "draw" in str(side) or side in ("12", "no_draw"):
+            p = h + a
+        else:
+            p = h + d
+        p = max(0.0, min(1.0, p))
+        return (round(p, 4), round(1.0 - p, 4), "model")
+    return _safe_local(_go, (0.5, 0.5, "model"))
+
+
+def logic_dnb(triple, side="home"):
+    """Draw-No-Bet: refund-aware triplet (draw = push). p_eff excludes draw
+    mass renormalised over the non-draw outcomes -> exact (win, push, loss)."""
+    def _go():
+        t = triple or {}
+        h = _numf(t.get("Home") or t.get("home"), 0.0)
+        d = _numf(t.get("Draw") or t.get("draw"), 0.0)
+        a = _numf(t.get("Away") or t.get("away"), 0.0)
+        win = h if str(side).startswith("h") else a
+        lose = a if str(side).startswith("h") else h
+        tot = win + lose + d
+        if tot <= 0:
+            return (0.5, 0.5, "model")
+        pw, pp, pl = win / tot, d / tot, lose / tot
+        p_eff = pw + 0.5 * pp   # push refunds half-credit convention
+        return (round(p_eff, 4), round(pl, 4), "model")
+    return _safe_local(_go, (0.5, 0.5, "model"))
+
+
+def logic_btts_yes(lam_h, lam_a, both_scored_last5=None, min_scored=4):
+    """BTTS-Yes priced independently (1-e^-lh)(1-e^-la); FORM gate: both
+    teams must have scored in >= min_scored of last 5 when supplied."""
+    def _go():
+        p = _exp1m(lam_h) * _exp1m(lam_a)
+        kind = "model"
+        if both_scored_last5 is not None and int(both_scored_last5) < int(min_scored):
+            kind = "model-form-fail"
+        return (round(max(0.0, min(1.0, p)), 4), round(1.0 - p, 4), kind)
+    return _safe_local(_go, (0.5, 0.5, "model"))
+
+
+def logic_btts_no(lam_h, lam_a, shutouts_last5=None, min_shutouts=3, rho=0.0):
+    """BTTS-No: 1 - (1-e^-lh)(1-e^-la) with optional Dixon-Coles (0,0)/(0,1)/
+    (1,0) correction; FORM gate: at least one side kept out >= min_shutouts/5."""
+    def _go():
+        yes = _exp1m(lam_h) * _exp1m(lam_a)
+        p = 1.0 - yes
+        try:
+            r = float(rho)
+            if r:
+                p00 = _math.exp(-lam_h - lam_a)
+                tau_corr = 1.0 + r * (lam_h + lam_a) - r * lam_h * lam_a
+                p = max(0.0, min(1.0, p * tau_corr if tau_corr > 0 else p))
+        except Exception:
+            pass
+        kind = "model"
+        if shutouts_last5 is not None and int(shutouts_last5) < int(min_shutouts):
+            kind = "model-form-fail"
+        return (round(p, 4), round(1.0 - p, 4), kind)
+    return _safe_local(_go, (0.5, 0.5, "model"))
+
+
+def logic_team_to_score(lam):
+    """Team-to-Score (any goal): 1 - e^-lambda."""
+    def _go():
+        p = _exp1m(lam)
+        return (round(p, 4), round(1.0 - p, 4), "model")
+    return _safe_local(_go, (0.5, 0.5, "model"))
+
+
+def logic_half_total(line, lam_h, lam_a, half_scale=0.44, side="over"):
+    """1st-Half Over0.5 / Under2.5 on half-lambdas (Poisson sum lattice)."""
+    def _go():
+        lh = _numf(lam_h) * _numf(half_scale, 0.44)
+        la = _numf(lam_a) * _numf(half_scale, 0.44)
+        if _sm is not None:
+            return _sm.estimate_game_total(line, lh, la, side)
+        return (0.5, 0.5, "model")
+    return _safe_local(_go, (0.5, 0.5, "model"))
+
+
+def logic_extreme(line, lam_h, lam_a, side="under"):
+    """Cushion extremes O0.5 / U5.5 — priced on the full Poisson matrix;
+    the DOUBLE-KEY hard gate (model>=0.90 AND odds>=1.15) lives in check_gates
+    via hard_model_floor/hard_odds_floor."""
+    def _go():
+        if _sm is not None:
+            return _sm.estimate_game_total(line, lam_h, lam_a, side)
+        return (0.5, 0.5, "model")
+    return _safe_local(_go, (0.5, 0.5, "model"))
+
+
+def logic_ml(ratings, sport="nba", home=True, n=0):
+    """Money-line favourite from the margin model (soccer callers pass a
+    pre-computed triple through price_selection instead)."""
+    if _sm is not None:
+        return _safe_local(lambda: _sm.estimate_moneyline(
+            ratings, sport, home, n), (0.5, 0.5, "model"))
+    return (0.5, 0.5, "model")
+
+
+def logic_runline(line, model_margin, sport="mlb", home=True, n=0):
+    """Underdog run-line cover probability (margin lattice)."""
+    if _sm is not None:
+        return _safe_local(lambda: _sm.estimate_alt_spread(
+            line, model_margin, sport, home, n), (0.5, 0.5, "model"))
+    return (0.5, 0.5, "model")
+
+
+def _safe_local(fn, fallback):
+    try:
+        return fn()
+    except Exception:
+        return fallback
+
+
+LOGIC_DISPATCH = {
+    "dc": logic_dc, "dnb": logic_dnb, "btts_yes": logic_btts_yes,
+    "btts_no": logic_btts_no, "team_score": logic_team_to_score,
+    "half_total": logic_half_total, "extreme": logic_extreme,
+    "ml": logic_ml, "runline": logic_runline, "handicap": logic_runline,
+}
+
+
+def logic_price(class_key, params, thresholds=None):
+    """Route a LOGIC-MODULES-v2 class through its engine, then the gates.
+    Returns row dict or None. Never raises."""
+    try:
+        cls = MARKET_CLASSES.get(class_key)
+        if not cls:
+            return None
+        lg = LOGIC_DISPATCH.get(cls.get("logic") or "")
+        if lg is None:
+            return None
+        p = params or {}
+        feats = {"odds": _numf(p.get("odds")),
+                 "form_std": _numf(p.get("form_std"), 99.0),
+                 "sample_games": _numf(p.get("sample_games"), 8.0),
+                 "espn_history": bool(p.get("espn_history")),
+                 "side": str(p.get("side", "over"))}
+        if cls["logic"] in ("dc", "dnb"):
+            peff, pl, kind = lg(p.get("triple"), p.get("side", "home"))
+            feats["form_flag"] = True   # triple comes from fitted rates
+        elif cls["logic"] == "btts_yes":
+            bs = p.get("both_scored_last5")
+            peff, pl, kind = lg(p.get("lam_h", 1.4), p.get("lam_a", 1.1),
+                                bs, cls.get("form_min_scored", 4))
+            feats["avg_rate"] = peff
+            if bs is not None:
+                feats["form_flag"] = int(bs) >= int(cls.get("form_min_scored", 4))
+        elif cls["logic"] == "btts_no":
+            so = p.get("shutouts_last5")
+            peff, pl, kind = lg(p.get("lam_h", 1.4), p.get("lam_a", 1.1),
+                                so, cls.get("form_shutouts", 3),
+                                p.get("rho", 0.0))
+            feats["avg_rate"] = peff
+            if so is not None:
+                feats["form_flag"] = int(so) >= int(cls.get("form_shutouts", 3))
+        elif cls["logic"] == "team_score":
+            peff, pl, kind = lg(p.get("lam", 1.2))
+            feats["avg_rate"] = peff
+            if p.get("scored_last5") is not None:
+                feats["form_flag"] = int(p["scored_last5"]) >= 4
+        elif cls["logic"] == "half_total":
+            feats["form_flag"] = True   # lambdas already form-fitted upstream
+            ln = _numf(p.get("line"), cls.get("line", 0.5))
+            peff, pl, kind = lg(ln, p.get("lam_h", 1.4), p.get("lam_a", 1.1),
+                                p.get("half_scale", 0.44),
+                                "under" if ln >= 2.0 else "over")
+            feats["line"] = ln
+        elif cls["logic"] == "extreme":
+            feats["form_flag"] = True
+            ln = _numf(p.get("line"), 4.5)
+            peff, pl, kind = lg(ln, p.get("lam_h", 1.4), p.get("lam_a", 1.1),
+                                "under" if ln >= 4.0 else "over")
+            feats["line"] = ln
+        elif cls["logic"] == "ml":
+            feats["form_flag"] = True   # ratings are recency-weighted upstream
+            peff, pl, kind = lg(p.get("ratings", {}), p.get("sport", "nba"),
+                                p.get("home", True), p.get("n", 0))
+        else:  # runline / handicap cushions
+            feats["form_flag"] = True
+            peff, pl, kind = lg(p.get("line", 0.0), p.get("model_margin", 0.0),
+                                p.get("sport", "mlb"), p.get("home", True),
+                                p.get("n", 0))
+            feats["cushion"] = _numf(p.get("cushion"), abs(
+                _numf(p.get("line")) - _numf(p.get("model_margin"))))
+        feats["model_prob"] = peff
+        ok, reasons = check_gates(class_key, feats, thresholds)
+        return {"class": class_key, "p_eff": round(peff, 4),
+                "p_loss": round(pl, 4), "ensemble_kind": kind,
+                "features": feats, "gates": get_gates(class_key, thresholds),
+                "pass": ok, "reasons": reasons}
+    except Exception as e:
+        log(f"logic_price {class_key} failed: {type(e).__name__}")
+        return None
+
+
+
+# ---------------------------------------------------------------------------
+# FULL-SENTRY item 4 — META-GATES + HIT-RATE RANK
+# ---------------------------------------------------------------------------
+
+AGREEMENT_T1_MAX = 0.06   # |poisson_prob - feature_prob| <= 0.06 keeps T1
+
+
+def agreement_check(row):
+    """ENSEMBLE AGREEMENT meta-gate: returns (ok, delta). Rows without a
+    feature leg (pure Poisson / derived) can never be T1 on agreement alone
+    unless poisson==blended within tolerance."""
+    try:
+        pp = row.get("poisson_prob")
+        fp = row.get("feature_prob")
+        if pp is None or fp is None:
+            return True, 0.0
+        d = abs(float(pp) - float(fp))
+        return d <= AGREEMENT_T1_MAX, round(d, 4)
+    except Exception:
+        return True, 0.0
+
+
+def rank_candidates(rows):
+    """HIT-RATE RANK: sort all qualified candidates cross-sport by p_eff desc,
+    then edge desc. Adds agreement fields + tier downgrade hints in place.
+    Never raises."""
+    try:
+        out = []
+        for r in rows or []:
+            rr = dict(r)
+            ok, d = agreement_check(rr)
+            rr["agreement_delta"] = d
+            rr["agreement_ok"] = ok
+            if not ok and str(rr.get("tier", "T1")) == "T1":
+                rr["tier"] = "T2"
+                rr.setdefault("reasons", []).append(
+                    f"agreement {d:.3f} > {AGREEMENT_T1_MAX}: T1->T2 downgrade")
+            out.append(rr)
+        out.sort(key=lambda x: (-float(x.get("p_eff") or x.get("model_prob") or 0.0),
+                                -float(x.get("edge_vs_model") or
+                                       x.get("edge") or 0.0)))
+        return out
+    except Exception:
+        return list(rows or [])
+
+
+def grey_chips():
+    """Grey 'needs data source' group for the betslip (never silence)."""
+    return [{"class": "grey_needs_data", "sport": sp,
+             "label": f"{sp}: needs data source"} for sp in GREY_SPORTS]
 
 
 def hunt_start_report(thresholds=None):
