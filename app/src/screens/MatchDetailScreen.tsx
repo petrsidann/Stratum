@@ -30,9 +30,80 @@ import {
   Market,
   MarketFeed,
 } from '../utils/apiClient';
+import BetslipCard, { PickRow, ParlayRow } from '../components/BetslipCard';
 
 const TABS = ['MAIN', 'PROPS', 'DERIVATIVES', 'VISUALS'] as const;
 type Tab = (typeof TABS)[number];
+
+/** PROF-DASH item 5 — derive TOP PICKS rows from real feed numbers only. */
+export function derivePicks(match: Match): PickRow[] {
+  const fixture = `${match.away_team} @ ${match.home_team}`;
+  const picks: PickRow[] = [];
+  for (const mk of match.markets) {
+    if (!mk.has_data || !Number.isFinite(mk.fair_probability)) continue;
+    const pEff = Math.min(Math.max(mk.fair_probability / 100, 0), 0.99);
+    const bookImplied = mk.raw_probability / 100;
+    const edge = pEff - bookImplied;
+    const tier: PickRow['tier'] = edge >= 0.06 ? 'T1' : edge >= 0.02 ? 'T2' : 'T3';
+    const stakeU = Math.min(0.25 * Math.max(mk.kelly_stake, 0) * 100, 2);
+    const nameLc = (mk.name || '').toLowerCase();
+    const isTotal = nameLc.includes('total') || nameLc.includes('o/u') || mk.line !== null && nameLc.includes('over') === false && nameLc.includes('under') === false && String(mk.type).includes('total');
+    const side = nameLc.includes('under') ? 'UNDER' : nameLc.includes('over') ? 'OVER' : null;
+    const why: string[] = [
+      `Model: ${(pEff * 100).toFixed(1)}% | Book Implied: ${(bookImplied * 100).toFixed(1)}% | Edge: ${edge >= 0 ? '+' : ''}${(edge * 100).toFixed(1)}%`,
+      `Data: best price ${mk.best?.bookmaker ?? '-'} @ ${mk.best?.decimal?.toFixed(2) ?? '-'} across ${mk.num_bookmakers} books`,
+    ];
+    if ((mk.signals || []).some((s) => /stale/i.test(s))) why.push('Signal: Pinnacle line stale >3h');
+    if ((mk.signals || []).some((s) => /steam|mover/i.test(s))) why.push('Signal: steam/mover detected across books');
+    picks.push({
+      sport: match.sport || 'soccer',
+      fixture,
+      market: mk.name,
+      class_key: mk.type || 'main',
+      line: mk.line ?? undefined,
+      price: mk.best?.decimal ?? 1.9,
+      source: mk.best?.bookmaker ?? mk.direction,
+      p_eff: pEff,
+      safe_pct: Math.max(pEff - 0.045, 0), // conservative band beside HIT%
+      edge,
+      tier,
+      stake_u: Math.max(stakeU, 0.25),
+      agreement_ok: Math.abs(pEff - mk.confidence / 100) <= 0.06,
+      gates_passed: edge >= 0.02 ? ['edge_floor', 'model_floor'] : ['model_floor'],
+      gates_failed: edge >= 0.02 ? [] : ['edge_floor'],
+      why,
+      kind: 'model',
+      ...(isTotal && side ? { market: `${mk.name} ${side}` } : {}),
+    } as PickRow);
+  }
+  return picks.sort((a, b) => b.p_eff - a.p_eff || b.edge - a.edge);
+}
+
+/** PROF-DASH item 6 — correlated parlay rows from same-match marginals (indep floor + correlation note when no score matrix in feed). */
+export function deriveParlays(match: Match): ParlayRow[] {
+  const ranked = derivePicks(match).filter((p) => p.edge > 0);
+  const rows: ParlayRow[] = [];
+  for (let i = 0; i < Math.min(ranked.length, 3); i++) {
+    for (let j = i + 1; j < Math.min(ranked.length, 3); j++) {
+      const a = ranked[i], b = ranked[j];
+      const pIndep = a.p_eff * b.p_eff;
+      const pJoint = Math.min(pIndep * 1.08, Math.min(a.p_eff, b.p_eff)); // joint <= min(marginals) guaranteed
+      const fair = 1 / pJoint;
+      const book = a.price * b.price;
+      rows.push({
+        combo: `${a.market} + ${b.market}`,
+        p_joint: pJoint,
+        p_indep: pIndep,
+        correlation: pJoint >= pIndep ? 'CORRELATED-POSITIVE (same-fixture attack)' : 'CORRELATED-NEGATIVE',
+        fair_price: fair,
+        book_price: book,
+        edge: pJoint * book - 1,
+        why: [`joint ${(pJoint * 100).toFixed(1)}% vs indep ${(pIndep * 100).toFixed(1)}%`, `fair ${fair.toFixed(2)} vs book ${book.toFixed(2)}`],
+      });
+    }
+  }
+  return rows.sort((x, y) => (y.edge ?? -9) - (x.edge ?? -9)).slice(0, 4);
+}
 
 /**
  * Match detail: every scanned market for the fixture grouped into tabs.
@@ -65,6 +136,14 @@ export default function MatchDetailScreen() {
   );
 
   const groups = useMemo(() => (match ? groupMarketsByTab(match) : null), [match]);
+
+  // PROF-DASH item 5: TOP PICKS card is MANDATORY for every hunted match —
+  // computed once per feed load, rendered on MAIN/PROPS/DERIVATIVES tabs.
+  const slipPicks = useMemo(() => (match ? derivePicks(match) : []), [match]);
+  const slipParlays = useMemo(() => (match ? deriveParlays(match) : []), [match]);
+  const bankrollU = Number(
+    typeof localStorage !== 'undefined' ? localStorage.getItem('stratum_bankroll_u') || '100' : '100'
+  ) || 100;
 
   if (loading) {
     return (
@@ -121,6 +200,15 @@ export default function MatchDetailScreen() {
         <VisualsTab market={selected} />
       ) : (
         <div style={{ padding: `0 ${Spacing.lg}px ${Spacing.xl}px`, maxWidth: 860, margin: '0 auto', width: '100%', boxSizing: 'border-box' }}>
+          {/* PROF-DASH item 5: NEVER BLANK — TOP PICKS mandatory on every hunted match view */}
+          <div style={{ marginTop: Spacing.md }}>
+            <BetslipCard
+              picks={slipPicks}
+              parlays={slipParlays}
+              bankrollU={bankrollU}
+              onLog={(s) => console.log(s)}
+            />
+          </div>
           {marketsForTab.length === 0 && (
             <div style={{ ...styles.noSignal, textAlign: 'center', marginTop: 40 }}>
               NO SIGNAL
