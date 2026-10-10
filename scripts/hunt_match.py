@@ -353,7 +353,7 @@ def _tok_overlap(query_tok, name_toks):
     return hits / len(query_tok)
 
 
-def fuzzy_fixture_match(home, away, toks, threshold=0.6):
+def fuzzy_fixture_match(home, away, toks, threshold=0.7):
     """True when the query tokens cover BOTH teams (each side >= threshold).
     Single-token team names still need an exact/substring hit on that token."""
     h_toks = norm_team(home)
@@ -709,6 +709,27 @@ def main():
         # then let the model price everything (edge_vs_model per merged row).
         if not fx["top_edges"] and fx.get("sport") in IS_SOCCER:
             scout_kenya_into_fixture(fx)
+        # EMERGENCY item 5: ESPN (and Kenya) still zero -> the-odds-api FUZZY JOIN
+        # fallback immediately; joined count logged per hunt.
+        if not fx["top_edges"]:
+            try:
+                import espn_join
+                _v_sport = {"soccer": "soccer_epl", "basketball": "basketball_nba",
+                            "american_football": "americanfootball_nfl",
+                            "baseball": "baseball_mlb", "hockey": "nhl"}.get(
+                    fx.get("sport"), "soccer_epl")
+                jrows, jstat = espn_join.join_oddsapi_for_fixture(
+                    fx["home"], fx["away"], sport=_v_sport, threshold=0.7)
+                fx["oddsapi_status"] = jstat
+                if jrows:
+                    fx["top_edges"] = sorted(jrows, key=lambda r: r["confidence_score"],
+                                             reverse=True)[:12]
+                    fx["markets_scanned"] = len(jrows)
+                log("SCOUT", f"ODDSAPI fallback join {fx['home']} vs {fx['away']}: {jstat} "
+                             f"(total attached rows now {len(fx['top_edges'])})")
+            except Exception as e:
+                fx["oddsapi_status"] = f"crash({type(e).__name__})"
+                log("SCOUT", f"ODDSAPI fallback skipped: {type(e).__name__}")
         log("ACTUARY", f"{fx['home']} vs {fx['away']}: de-vigged {fx['markets_scanned']} market lines")
         if QUANT_OK and fx.get("sport") in IS_SOCCER:
             try:
