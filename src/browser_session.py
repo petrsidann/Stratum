@@ -121,6 +121,34 @@ async def scrape_page(url, wait_seconds=6, extract_js=None):
     return _safe_call(_go)
 
 
+def scrape_page_sync(url, wait_seconds=6, extract_js=None):
+    """Synchronous entry point for hunt scripts (they run without an event loop).
+    Runs the browser-use coroutine via asyncio.run(); falls back to plain HTTP on
+    ANY failure (missing chromium binary, sandbox network block, TypeError in a
+    newer browser_use API surface). Never raises, never leaks un-awaited coros."""
+    import asyncio
+
+    async def _fresh_coro():
+        return await scrape_page(url, wait_seconds, extract_js)
+
+    def _go():
+        try:
+            return asyncio.run(_fresh_coro())
+        except Exception as e:
+            log(f"browser scrape failed for {url}: {type(e).__name__} -> HTTP fallback")
+            return None
+
+    try:
+        asyncio.get_running_loop()
+        return http_get(url)  # caller already inside a loop: don't re-enter
+    except RuntimeError:
+        pass
+    html = _safe_call(_go)
+    if not html:
+        html = _safe_call(lambda: http_get(url))
+    return html
+
+
 def _safe_call(fn):
     try:
         return fn()
