@@ -1,20 +1,20 @@
 {
-  "hunt_id": "hmv2h0mtdngsj8",
+  "hunt_id": "hmv4rtwhw57twg",
   "status": "complete",
   "stage": "DONE",
   "progress": 1.0,
-  "generated_at_utc": "2026-10-10T14:11:03.030789+00:00",
+  "generated_at_utc": "2026-10-12T04:49:11.973266+00:00",
   "fixtures": [
     {
-      "fixture_id": "401878776",
-      "home": "Aston Villa",
-      "away": "Brentford",
+      "fixture_id": "401879267",
+      "home": "Coventry City",
+      "away": "Newcastle United",
       "sport": "soccer",
       "league": "eng.1",
-      "kickoff_utc": "2026-10-10T14:00Z",
+      "kickoff_utc": "2026-10-12T19:00Z",
       "team_ids": {
-        "home": "362",
-        "away": "337"
+        "home": "388",
+        "away": "361"
       },
       "markets_scanned": 15,
       "top_edges": [
@@ -324,6 +324,7 @@
         "BETIKA": "waf (BETIKA html+json both failed)",
         "ODIBETS": "nav (ODIBETS html+json both failed)"
       },
+      "oddsapi_status": "key_missing",
       "model_coverage": {
         "priced": 2,
         "denominator": 44
@@ -655,31 +656,31 @@
     "hockey/nhl": "no_fixture_in_board"
   },
   "available_today": [
-    "Arsenal vs Leeds United",
-    "Aston Villa vs Brentford",
-    "Chelsea vs AFC Bournemouth",
-    "Ipswich Town vs Fulham",
-    "Sunderland vs Brighton & Hove Albion",
-    "Manchester United vs Tottenham Hotspur",
-    "Rayo Vallecano vs Athletic Club",
-    "Alav\u00e9s vs Atl\u00e9tico Madrid",
-    "Barcelona vs Getafe",
-    "Real Madrid vs Villarreal",
-    "Genoa vs Fiorentina",
-    "Internazionale vs Parma"
+    "Coventry City vs Newcastle United",
+    "Levante vs Sevilla",
+    "Atalanta vs Venezia",
+    "Torino vs Udinese",
+    "Portland Trail Blazers vs London Lions",
+    "Atlanta Hawks vs Oklahoma City Thunder",
+    "Washington Wizards vs Brooklyn Nets",
+    "New York Knicks vs Minnesota Timberwolves",
+    "Utah Jazz vs San Antonio Spurs",
+    "Los Angeles Rams vs Buffalo Bills",
+    "Milwaukee Brewers vs Los Angeles Dodgers",
+    "Tampa Bay Rays vs Cleveland Guardians"
   ],
   "result": {
     "fixtures": [
       {
-        "fixture_id": "401878776",
-        "home": "Aston Villa",
-        "away": "Brentford",
+        "fixture_id": "401879267",
+        "home": "Coventry City",
+        "away": "Newcastle United",
         "sport": "soccer",
         "league": "eng.1",
-        "kickoff_utc": "2026-10-10T14:00Z",
+        "kickoff_utc": "2026-10-12T19:00Z",
         "team_ids": {
-          "home": "362",
-          "away": "337"
+          "home": "388",
+          "away": "361"
         },
         "markets_scanned": 15,
         "top_edges": [
@@ -989,6 +990,7 @@
           "BETIKA": "waf (BETIKA html+json both failed)",
           "ODIBETS": "nav (ODIBETS html+json both failed)"
         },
+        "oddsapi_status": "key_missing",
         "model_coverage": {
           "priced": 2,
           "denominator": 44
@@ -1320,18 +1322,18 @@
       "hockey/nhl": "no_fixture_in_board"
     },
     "available_today": [
-      "Arsenal vs Leeds United",
-      "Aston Villa vs Brentford",
-      "Chelsea vs AFC Bournemouth",
-      "Ipswich Town vs Fulham",
-      "Sunderland vs Brighton & Hove Albion",
-      "Manchester United vs Tottenham Hotspur",
-      "Rayo Vallecano vs Athletic Club",
-      "Alav\u00e9s vs Atl\u00e9tico Madrid",
-      "Barcelona vs Getafe",
-      "Real Madrid vs Villarreal",
-      "Genoa vs Fiorentina",
-      "Internazionale vs Parma"
+      "Coventry City vs Newcastle United",
+      "Levante vs Sevilla",
+      "Atalanta vs Venezia",
+      "Torino vs Udinese",
+      "Portland Trail Blazers vs London Lions",
+      "Atlanta Hawks vs Oklahoma City Thunder",
+      "Washington Wizards vs Brooklyn Nets",
+      "New York Knicks vs Minnesota Timberwolves",
+      "Utah Jazz vs San Antonio Spurs",
+      "Los Angeles Rams vs Buffalo Bills",
+      "Milwaukee Brewers vs Los Angeles Dodgers",
+      "Tampa Bay Rays vs Cleveland Guardians"
     ]
   }
 }
