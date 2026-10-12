@@ -41,9 +41,12 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+          RAPIDAPI_KEY: ${{ secrets.RAPIDAPI_KEY }}
+          BETFAIR_KEY: ${{ secrets.BETFAIR_KEY }}
         run: |
           pip install matplotlib --quiet
-          pip install playwright --quiet
+          pip install playwright browser-use --quiet
           python -m playwright install chromium --with-deps
           python scripts/hunt_match.py \
             --query "${{ inputs.match_query }}" \
