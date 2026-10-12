@@ -1,9 +1,9 @@
 {
-  "hunt_id": "hmv4rtwhw57twg",
+  "hunt_id": "nuclear_test_2f7af28",
   "status": "complete",
   "stage": "DONE",
   "progress": 1.0,
-  "generated_at_utc": "2026-10-12T04:49:11.973266+00:00",
+  "generated_at_utc": "2026-10-12T09:05:33.823050+00:00",
   "fixtures": [
     {
       "fixture_id": "401879267",
@@ -324,7 +324,8 @@
         "BETIKA": "waf (BETIKA html+json both failed)",
         "ODIBETS": "nav (ODIBETS html+json both failed)"
       },
-      "oddsapi_status": "key_missing",
+      "oddsapi_status": "no_fixture_in_board(0 polled)",
+      "rapidapi_status": "ok(0 squads,[] niche edges)",
       "model_coverage": {
         "priced": 2,
         "denominator": 44
@@ -990,7 +991,8 @@
           "BETIKA": "waf (BETIKA html+json both failed)",
           "ODIBETS": "nav (ODIBETS html+json both failed)"
         },
-        "oddsapi_status": "key_missing",
+        "oddsapi_status": "no_fixture_in_board(0 polled)",
+        "rapidapi_status": "ok(0 squads,[] niche edges)",
         "model_coverage": {
           "priced": 2,
           "denominator": 44
@@ -1334,6 +1336,273 @@
       "Los Angeles Rams vs Buffalo Bills",
       "Milwaukee Brewers vs Los Angeles Dodgers",
       "Tampa Bay Rays vs Cleveland Guardians"
-    ]
+    ],
+    "aggregated_picks": [
+      {
+        "market": "Total Goals Over/Under 0.5",
+        "selection": "Over",
+        "odds": 0.0,
+        "model_prob": 0.94,
+        "edge": 0.0,
+        "source": "MODEL",
+        "all_prices": [],
+        "sport": "soccer",
+        "family": "BOOK",
+        "safe": 0.6956,
+        "why": [
+          "Model probability: 94.0%",
+          "Edge: +0.0%"
+        ],
+        "match": "Coventry City vs Newcastle United"
+      },
+      {
+        "market": "Total Goals Over/Under 5.5",
+        "selection": "Under",
+        "odds": 0.0,
+        "model_prob": 0.94,
+        "edge": 0.0,
+        "source": "MODEL",
+        "all_prices": [],
+        "sport": "soccer",
+        "family": "BOOK",
+        "safe": 0.6956,
+        "why": [
+          "Model probability: 94.0%",
+          "Edge: +0.0%"
+        ],
+        "match": "Coventry City vs Newcastle United"
+      },
+      {
+        "market": "Total Goals Over/Under 4.5",
+        "selection": "Under",
+        "odds": 0.0,
+        "model_prob": 0.86,
+        "edge": 0.0,
+        "source": "MODEL",
+        "all_prices": [],
+        "sport": "soccer",
+        "family": "BOOK",
+        "safe": 0.66,
+        "why": [
+          "Model probability: 86.0%",
+          "Edge: +0.0%"
+        ],
+        "match": "Coventry City vs Newcastle United"
+      },
+      {
+        "market": "Total Goals Over/Under 1.5",
+        "selection": "Over",
+        "odds": 0.0,
+        "model_prob": 0.75,
+        "edge": 0.0,
+        "source": "MODEL",
+        "all_prices": [],
+        "sport": "soccer",
+        "family": "BOOK",
+        "safe": 0.6111,
+        "why": [
+          "Model probability: 75.0%",
+          "Edge: +0.0%"
+        ],
+        "match": "Coventry City vs Newcastle United"
+      },
+      {
+        "market": "Total Goals Over/Under 3.5",
+        "selection": "Under",
+        "odds": 0.0,
+        "model_prob": 0.7,
+        "edge": 0.0,
+        "source": "MODEL",
+        "all_prices": [],
+        "sport": "soccer",
+        "family": "BOOK",
+        "safe": 0.5889,
+        "why": [
+          "Model probability: 70.0%",
+          "Edge: +0.0%"
+        ],
+        "match": "Coventry City vs Newcastle United"
+      },
+      {
+        "market": "Total Goals Over/Under 2.5",
+        "selection": "Over",
+        "odds": 0.0,
+        "model_prob": 0.52,
+        "edge": 0.0,
+        "source": "MODEL",
+        "all_prices": [],
+        "sport": "soccer",
+        "family": "BOOK",
+        "safe": 0.5089,
+        "why": [
+          "Model probability: 52.0%",
+          "Edge: +0.0%"
+        ],
+        "match": "Coventry City vs Newcastle United"
+      },
+      {
+        "market": "Total Goals Over/Under 2.5",
+        "selection": "Under",
+        "odds": 0.0,
+        "model_prob": 0.48,
+        "edge": 0.0,
+        "source": "MODEL",
+        "all_prices": [],
+        "sport": "soccer",
+        "family": "BOOK",
+        "safe": 0.4911,
+        "why": [
+          "Model probability: 48.0%",
+          "Edge: +0.0%"
+        ],
+        "match": "Coventry City vs Newcastle United"
+      },
+      {
+        "market": "Match Result (1X2)",
+        "selection": "Home",
+        "odds": 0.0,
+        "model_prob": 0.46,
+        "edge": 0.0,
+        "source": "MODEL",
+        "all_prices": [],
+        "sport": "soccer",
+        "family": "BOOK",
+        "safe": 0.4822,
+        "why": [
+          "Model probability: 46.0%",
+          "Edge: +0.0%"
+        ],
+        "match": "Coventry City vs Newcastle United"
+      },
+      {
+        "market": "Match Result (1X2)",
+        "selection": "Away",
+        "odds": 0.0,
+        "model_prob": 0.3,
+        "edge": 0.0,
+        "source": "MODEL",
+        "all_prices": [],
+        "sport": "soccer",
+        "family": "BOOK",
+        "safe": 0.4111,
+        "why": [
+          "Model probability: 30.0%",
+          "Edge: +0.0%"
+        ],
+        "match": "Coventry City vs Newcastle United"
+      },
+      {
+        "market": "Total Goals Over/Under 3.5",
+        "selection": "Over",
+        "odds": 0.0,
+        "model_prob": 0.3,
+        "edge": 0.0,
+        "source": "MODEL",
+        "all_prices": [],
+        "sport": "soccer",
+        "family": "BOOK",
+        "safe": 0.4111,
+        "why": [
+          "Model probability: 30.0%",
+          "Edge: +0.0%"
+        ],
+        "match": "Coventry City vs Newcastle United"
+      },
+      {
+        "market": "Total Goals Over/Under 1.5",
+        "selection": "Under",
+        "odds": 0.0,
+        "model_prob": 0.25,
+        "edge": 0.0,
+        "source": "MODEL",
+        "all_prices": [],
+        "sport": "soccer",
+        "family": "BOOK",
+        "safe": 0.3889,
+        "why": [
+          "Model probability: 25.0%",
+          "Edge: +0.0%"
+        ],
+        "match": "Coventry City vs Newcastle United"
+      },
+      {
+        "market": "Match Result (1X2)",
+        "selection": "Draw",
+        "odds": 0.0,
+        "model_prob": 0.24,
+        "edge": 0.0,
+        "source": "MODEL",
+        "all_prices": [],
+        "sport": "soccer",
+        "family": "BOOK",
+        "safe": 0.3844,
+        "why": [
+          "Model probability: 24.0%",
+          "Edge: +0.0%"
+        ],
+        "match": "Coventry City vs Newcastle United"
+      },
+      {
+        "market": "Total Goals Over/Under 4.5",
+        "selection": "Over",
+        "odds": 0.0,
+        "model_prob": 0.14,
+        "edge": 0.0,
+        "source": "MODEL",
+        "all_prices": [],
+        "sport": "soccer",
+        "family": "BOOK",
+        "safe": 0.34,
+        "why": [
+          "Model probability: 14.0%",
+          "Edge: +0.0%"
+        ],
+        "match": "Coventry City vs Newcastle United"
+      },
+      {
+        "market": "Total Goals Over/Under 0.5",
+        "selection": "Under",
+        "odds": 0.0,
+        "model_prob": 0.06,
+        "edge": 0.0,
+        "source": "MODEL",
+        "all_prices": [],
+        "sport": "soccer",
+        "family": "BOOK",
+        "safe": 0.3044,
+        "why": [
+          "Model probability: 6.0%",
+          "Edge: +0.0%"
+        ],
+        "match": "Coventry City vs Newcastle United"
+      },
+      {
+        "market": "Total Goals Over/Under 5.5",
+        "selection": "Over",
+        "odds": 0.0,
+        "model_prob": 0.06,
+        "edge": 0.0,
+        "source": "MODEL",
+        "all_prices": [],
+        "sport": "soccer",
+        "family": "BOOK",
+        "safe": 0.3044,
+        "why": [
+          "Model probability: 6.0%",
+          "Edge: +0.0%"
+        ],
+        "match": "Coventry City vs Newcastle United"
+      }
+    ],
+    "aggregator_status": {
+      "ESPN:Coventry City vs Newcastle United": "ok(15)",
+      "ODDSAPI:Coventry City vs Newcastle United": "no_fixture_in_board(0 polled)",
+      "BETIKA:Coventry City vs Newcastle United": "waf (BETIKA html+json both failed)",
+      "ODIBETS:Coventry City vs Newcastle United": "nav (ODIBETS html+json both failed)",
+      "LOTTERY": "blocked_or_empty",
+      "QUARTERS": "blocked_or_empty",
+      "CORNERS": "blocked_or_empty",
+      "GREY": "cricket,golf,motorsports,darts,esports,mma"
+    }
   }
 }
