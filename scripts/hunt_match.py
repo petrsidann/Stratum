@@ -18,6 +18,19 @@ try:
 except Exception as _qe:          # never break the hunt if imports fail
     model_poisson = context_llm = None
     QUANT_OK = False
+# NUCLEAR items 2/3/4/6: multi-book odds + Pinnacle no-vig + signals, api-football
+# niche pricing, browser-use scrapers (lottery/quarters/corners), unified SAFE%-ranked
+# aggregator. All stdlib-guarded; missing module/key NEVER breaks a hunt.
+try:
+    import odds_api
+    import event_engine
+    import espn_join
+except Exception:
+    odds_api = event_engine = espn_join = None
+try:
+    import market_aggregator
+except Exception:
+    market_aggregator = None
 IS_SOCCER = {"soccer", "football_soccer"}
 
 # QUANT BRAIN: football taxonomy rows (owner CSV) for coverage accounting
@@ -372,6 +385,27 @@ def fuzzy_fixture_match(home, away, toks, threshold=0.7):
     return best is not None
 
 
+def _pair_join_log(q_home, q_away, fx_home, fx_away, threshold=0.7):
+    """NUCLEAR item 1: log every fuzzy-join decision so the owner sees WHY a
+    BOOK row attached or not: 'aston villa' vs 'aston villa' = MATCH style."""
+    try:
+        ht = norm_team(fx_home)
+        at = norm_team(fx_away)
+        qt = [t for t in re.split(r"[^a-z0-9]+", (q_home or "").lower()) if t]
+        ov = _tok_overlap(qt, ht) if qt else 0.0
+        q2 = [t for t in re.split(r"[^a-z0-9]+", (q_away or "").lower()) if t]
+        ov2 = _tok_overlap(q2, at) if q2 else 0.0
+        ok = ov >= threshold and ov2 >= threshold
+        verdict = "MATCH" if ok else f"NO MATCH (threshold {threshold})"
+        log("SCOUT", f"ESPN join: '{' '.join(qt)}' vs '{' '.join(ht)}' "
+                     f"= {'MATCH' if ok else 'FAIL'} ({ov:.2f}) | "
+                     f"'{' '.join(q2)}' vs '{' '.join(at)}' "
+                     f"= {'MATCH' if ok else 'FAIL'} ({ov2:.2f}) -> {verdict}")
+        return ok
+    except Exception:
+        return False
+
+
 def _tax_name(book_market):
     """Map a book market name to its taxonomy row (owner CSV), or None."""
     if not TAX_FOOTBALL:
@@ -662,6 +696,11 @@ def main():
             if toks and (all(t in combined for t in toks)
                          or fuzzy_fixture_match(home, away, toks)):
                 n_match += 1
+                # NUCLEAR item 1: prove the join decision in the log (owner sees
+                # MATCH/NO-MATCH with token-overlap scores -> BOOK column reason).
+                _v_qs = args.query.lower().split(" vs ")
+                _pair_join_log(_v_qs[0], _v_qs[-1] if len(_v_qs) > 1 else "",
+                               home, away)
                 try:
                     rows = markets_for_comp(comp)
                 except Exception as e:
@@ -730,6 +769,103 @@ def main():
             except Exception as e:
                 fx["oddsapi_status"] = f"crash({type(e).__name__})"
                 log("SCOUT", f"ODDSAPI fallback skipped: {type(e).__name__}")
+        # NUCLEAR item 2: ALWAYS call the-odds-api when ODDS_API_KEY exists —
+        # merge multi-book rows (incl Pinnacle) into every matched fixture, not
+        # just zero-line ones; compute PINNACLE NO-VIG fair benchmark + STEAM/
+        # STALE-LINE signals; joined book count logged per fixture. Never raises.
+        try:
+            if odds_api and odds_api.odds_api_key():
+                _v_sport2 = {"soccer": "soccer_epl", "basketball": "basketball_nba",
+                             "american_football": "americanfootball_nfl",
+                             "baseball": "baseball_mlb", "hockey": "nhl"}.get(
+                    fx.get("sport"), "soccer_epl")
+                _v_evts = odds_api.fetch_odds(sport=_v_sport2) or []
+                _v_my = None
+                for _v_e in _v_evts:
+                    if espn_join and espn_join.fixture_fuzzy_match(
+                            fx["home"], fx["away"], _v_e.get("home") or "",
+                            _v_e.get("away") or "", 0.7):
+                        _v_my = _v_e
+                        break
+                if _v_my:
+                    _v_apr = _v_my.get("all_prices") or []
+                    _v_books = len({p.get("source") for p in _v_apr if p.get("source")})
+                    _v_existing = {(str(r.get("market")), str(r.get("selection")))
+                                   for r in fx["top_edges"]}
+                    _v_added = 0
+                    for _v_r in (_v_my.get("edges") or []):
+                        if (str(_v_r.get("market")), str(_v_r.get("selection"))) in _v_existing:
+                            continue
+                        fx["top_edges"].append(_v_r)
+                        _v_added += 1
+                    _v_pinn = odds_api.pinnacle_novig(_v_apr)
+                    _v_sigs = odds_api.detect_signals(_v_my.get("price_history") or [],
+                                                      pinnacle_fair=_v_pinn)
+                    fx["pinnacle_novig"] = {k: v for k, v in (_v_pinn or {}).items()}
+                    fx["signals"] = (_v_sigs or [])[:8]
+                    fx["oddsapi_status"] = f"ok({_v_books} books)"
+                    fx["markets_scanned"] = len(fx["top_edges"])
+                    fx["top_edges"] = sorted(fx["top_edges"],
+                                             key=lambda r: r["confidence_score"],
+                                             reverse=True)[:16]
+                    log("SCOUT-API", f"Odds API: fetched {_v_books} books for "
+                                     f"{fx['home']} vs {fx['away']} "
+                                     f"(+{_v_added} merged rows, "
+                                     f"{len(_v_sigs or [])} signals)")
+                else:
+                    log("SCOUT-API", f"Odds API: no fuzzy match for "
+                                     f"{fx['home']} vs {fx['away']} today")
+            else:
+                fx["oddsapi_status"] = fx.get("oddsapi_status") or "key_missing"
+                log("SCOUT-API", "ODDS_API_KEY missing -> multi-book merge skipped (chip shown)")
+        except Exception as e:
+            log("SCOUT-API", f"odds-api merge skipped: {type(e).__name__}")
+        # NUCLEAR item 3: ALWAYS call api-football (RAPIDAPI_KEY) for soccer —
+        # deep corners/cards/xG stats -> Poisson-priced niche edges merged into
+        # top_edges so lazy generic book lines get challenged. Never raises.
+        if fx.get("sport") in IS_SOCCER:
+            try:
+                if event_engine and event_engine.rapidapi_key():
+                    _v_tids = fx.get("team_ids") or {}
+                    _v_h = event_engine.fetch_team_stats(_v_tids.get("home"))
+                    _v_a = event_engine.fetch_team_stats(_v_tids.get("away"))
+                    _v_exp = event_engine.merge_squad_stats(_v_h, _v_a)
+                    _v_bl = {}
+                    for _v_r in fx["top_edges"]:
+                        _v_mkt = str(_v_r.get("market") or "").lower()
+                        try:
+                            _v_ln = float(_v_r.get("line"))
+                        except (TypeError, ValueError):
+                            continue
+                        if "corner" in _v_mkt and "corners_total" not in _v_bl:
+                            _v_bl["corners_total"] = (_v_ln, float(_v_r.get("book_odds") or 0))
+                        if "card" in _v_mkt and "cards_total" not in _v_bl:
+                            _v_bl["cards_total"] = (_v_ln, float(_v_r.get("book_odds") or 0))
+                    _v_rows = event_engine.niche_edges(_v_exp, _v_bl)
+                    _v_count = sum(1 for s in (_v_h, _v_a) if s)
+                    for _v_r in _v_rows:
+                        fx["top_edges"].append({
+                            "market": _v_r["market"], "selection": f"Over {_v_r['line']}",
+                            "line": _v_r["line"], "book_odds": _v_r["price"],
+                            "confidence_score": round(_v_r["p_eff"] * 100, 1),
+                            "ev_percent": round(_v_r["edge"] * 100, 2),
+                            "all_prices": [{"odds": _v_r["price"], "source": "BETIKA"}],
+                            "best_price_source": "BETIKA", "source": "RAPIDAPI",
+                            "why_bullets": _v_r.get("why") or []})
+                    fx["rapidapi_status"] = f"ok({_v_count} squads,{_v_rows and len(_v_rows)} niche edges)"
+                    log("SCOUT-API", f"RapidAPI: fetched {'5 recent fixtures w/' if _v_count else '0'}"
+                                     f"corners/cards/xG for {fx['home']} vs {fx['away']} "
+                                     f"-> {len(_v_rows)} priced niche edges")
+                    if _v_exp.get("lam_corners"):
+                        log("ACTUARY", f"{fx['home']} vs {fx['away']}: lambda_corners="
+                                       f"{_v_exp['lam_corners']:.2f} lambda_cards="
+                                       f"{(_v_exp.get('lam_cards') or 0):.2f}")
+                else:
+                    fx["rapidapi_status"] = "key_missing"
+                    log("SCOUT-API", "RAPIDAPI_KEY missing -> api-football niche pricing disabled (chip shown)")
+            except Exception as e:
+                fx["rapidapi_status"] = f"crash({type(e).__name__})"
+                log("SCOUT-API", f"rapidapi niche pass skipped: {type(e).__name__}")
         log("ACTUARY", f"{fx['home']} vs {fx['away']}: de-vigged {fx['markets_scanned']} market lines")
         if QUANT_OK and fx.get("sport") in IS_SOCCER:
             try:
@@ -769,6 +905,26 @@ def main():
         log("STRATEGIST", f"TOP PICK: {best['selection']} @ {best['book_odds']} "
                           f"(hit prob {best['confidence_score']}%, edge {best['ev_percent']}%)")
     res = {"fixtures": fixtures, "sources_status": sources, "available_today": available}
+    # NUCLEAR item 6: UNIFIED MARKET AGGREGATOR — merge ESPN + ODDSAPI + Kenya +
+    # browser-use lottery/quarters/corners into one SAFE%-ranked stream with
+    # WHY-THIS-BET bullets; never empty when any source produced any row.
+    if market_aggregator:
+        try:
+            _v_cands, _v_stats = market_aggregator.aggregate(fixtures=fixtures)
+            res["aggregated_picks"] = _v_cands[:40]
+            res["aggregator_status"] = _v_stats
+            _v_lot_n = sum(1 for c in _v_cands if c.get("family") == "LOTTERY")
+            _v_cor_n = sum(1 for c in _v_cands if c.get("family") == "CORNERS")
+            _v_qtr_n = sum(1 for c in _v_cands if c.get("family") == "QUARTERS")
+            log("BETSLIP", f"aggregator: {len(_v_cands)} candidates ranked by SAFE% "
+                           f"(lottery={_v_lot_n} corners={_v_cor_n} quarters={_v_qtr_n})")
+            if _v_cands:
+                _v_top = _v_cands[0]
+                log("BETSLIP", f"T3-GUARANTEE fallback ready: {_v_top.get('market')} "
+                               f"{_v_top.get('selection')} SAFE%={_v_top.get('safe')} "
+                               f"src={_v_top.get('source')}")
+        except Exception as e:
+            log("BETSLIP", f"aggregator skipped: {type(e).__name__}")
     # HONEST MESSAGE: every source returned zero rows -> say so precisely.
     if not any(f.get("top_edges") for f in fixtures):
         parts = []

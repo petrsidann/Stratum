@@ -84,7 +84,9 @@ const Badge: React.FC<{ ok?: boolean }> = ({ ok }) => (
   </span>
 );
 
-const Row: React.FC<{ p: PickRow; caution?: boolean }> = ({ p, caution }) => (
+const Row: React.FC<{ p: PickRow; caution?: boolean }> = ({ p, caution }) => {
+  const [whyOpen, setWhyOpen] = React.useState(p.tier !== 'T3');
+  return (
   <div style={{ background: C.row, border: `1px solid ${C.border}`, borderRadius: 8, padding: 10, marginBottom: 8 }}>
     <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap' }}>
       <div style={{ fontWeight: 700, color: C.text }}>
@@ -105,14 +107,20 @@ const Row: React.FC<{ p: PickRow; caution?: boolean }> = ({ p, caution }) => (
     )}
     {(p.why || []).length > 0 && (
       <div style={{ marginTop: 8, borderTop: `1px dashed ${C.border}`, paddingTop: 6 }}>
-        <div style={{ fontSize: 11, fontWeight: 700, color: C.dim }}>WHY THIS BET</div>
-        <ul style={{ margin: '4px 0 0 18px', padding: 0, fontSize: 12, color: C.text }}>
-          {(p.why || []).map((w, i) => (<li key={i} style={{ marginBottom: 2 }}>{w}</li>))}
-        </ul>
+        <button onClick={() => setWhyOpen(o => !o)}
+          style={{ background: 'transparent', border: 'none', cursor: 'pointer', fontSize: 11, fontWeight: 700, color: C.dim, padding: 0, fontFamily: 'inherit' }}>
+          WHY THIS BET {whyOpen ? '▾' : '▸'}
+        </button>
+        {whyOpen && (
+          <ul style={{ margin: '4px 0 0 18px', padding: 0, fontSize: 12, color: C.text }}>
+            {(p.why || []).map((w, i) => (<li key={i} style={{ marginBottom: 2 }}>{w}</li>))}
+          </ul>
+        )}
       </div>
     )}
   </div>
-);
+  );
+};
 
 export const BetslipCard: React.FC<{
   picks: PickRow[]; parlays?: ParlayRow[]; bankrollU?: number; greyChips?: string[];

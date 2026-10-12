@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { dispatchHunt, pollHunt, pollLatest, getToken, setToken, AGENT_COLORS } from "../lib/swarmClient";
 import { loadSettings } from "../utils/settings";
+import BetslipCard, { PickRow } from "../components/BetslipCard";
 
 const C = {
   bg: "#0F111A", panel: "#1E2330", panelDeep: "#0B0D12",
@@ -200,6 +201,27 @@ export default function HunterScreen() {
         // EDGE ENGINE item (e): TOP PICKS card — only disciplined, qualified bets.
         const bankroll = loadSettings().bankroll || 0;
         const picks = qualifiedPicks(fx.top_edges, bankroll);
+        // NUCLEAR item 5: NEVER BLANK cross-sport BetslipCard fed by the unified
+        // SAFE%-ranked aggregator stream (ESPN+ODDSAPI+KENYA+LOTTERY+CORNERS+QUARTERS).
+        const aggPicks: PickRow[] = ((result.aggregated_picks || []) as any[])
+          .filter((c: any) => !c.match || c.match.includes(fx.home) || c.family !== "BOOK")
+          .slice(0, 25)
+          .map((c: any) => ({
+            sport: String(c.sport || "soccer").toUpperCase(),
+            fixture: c.match || `${fx.home} @ ${fx.away}`,
+            market: c.market || "?",
+            class_key: String(c.family || "BOOK").toLowerCase() + ":" + String(c.market || "?"),
+            line: c.line,
+            price: Number(c.odds || 0),
+            source: c.source,
+            p_eff: Number(c.model_prob || 0),
+            safe_pct: Number(c.safe || 0) / 100,
+            edge: Number(c.edge || 0),
+            tier: (Number(c.safe || 0) >= 60 ? "T1" : Number(c.edge || 0) >= 0.02 ? "T2" : "T3") as any,
+            stake_u: Math.max(Number(c.stake || 0), 0.25),
+            why: c.why || [],
+            gates_failed: c.gates_failed || [],
+          }));
         // 40-row cap, grouped by market (markets ordered by best edge inside).
         const rowsAll = fx.top_edges || [];
         const byMarket: Record<string, any[]> = {};
@@ -214,8 +236,9 @@ export default function HunterScreen() {
           <h2 style={{ fontSize: 20, fontWeight: 700, margin: "0 0 4px" }}>{fx.home} @ {fx.away}</h2>
           <div style={{ border: `1px solid ${picks.length ? C.green : C.border}`, borderRadius: 8, padding: "10px 12px", margin: "8px 0 10px", backgroundColor: "#0B0D12" }}>
             <p style={{ fontFamily: MONO, fontSize: 12, letterSpacing: 2, color: picks.length ? C.green : C.muted, margin: "0 0 6px" }}>TOP PICKS — BANKROLL {bankroll}u · QUARTER-KELLY</p>
-            {picks.length === 0 ? (
-              <p style={{ color: "#6B7686", fontSize: 13, fontFamily: MONO, margin: 0 }}>No qualified bet today — discipline over gambling.</p>
+            {picks.length === 0 && aggPicks.length === 0 ? (
+              // NUCLEAR item 5: footnote only — the board itself is never blank.
+              <p style={{ color: "#6B7686", fontSize: 13, fontFamily: MONO, margin: 0 }}>No book lines retrieved yet today — sources grey below; T3 fallback guaranteed once any source returns a row.</p>
             ) : picks.map((p: any, i: number) => (
               // SPEAK-UP(3): plain-English recommendation line.
               <p key={i} style={{ margin: "4px 0", fontSize: 13, fontFamily: MONO, lineHeight: 1.5 }}>
@@ -229,6 +252,11 @@ export default function HunterScreen() {
               </p>
             ))}
           </div>
+          {aggPicks.length > 0 && (
+            // NUCLEAR item 5: cross-sport NEVER-BLANK slip incl. lottery/corners/quarters,
+            // source badges, expandable WHY THIS BET, T3 guaranteed at >=0.25u.
+            <BetslipCard picks={aggPicks} bankrollU={bankroll || 100} />
+          )}
           <p style={{ color: C.muted, fontFamily: MONO, fontSize: 13, margin: "0 0 4px" }}>
             {fx.sport} · {fx.league} · {fx.kickoff_utc} · {fx.markets_scanned} market lines scanned
             {fx.model_coverage ? (
